@@ -216,38 +216,86 @@ class ObjectCounter:
             if self.line_p1:
                 self.check_lost_ids()
 
-            # ================= TRANSPARENT TOP PANEL =================
+            # ================= MODERN PROFESSIONAL DISPLAY PANEL =================
 
+            # Create dark semi-transparent overlay
             overlay = frame.copy()
-            cv2.rectangle(overlay, (0, 0), (1020, 80), (0, 0, 0), -1)
-            frame = cv2.addWeighted(overlay, 0.5, frame, 0.5, 0)
+            cv2.rectangle(overlay, (0, 0), (1020, 140), (20, 20, 20), -1)
+            frame = cv2.addWeighted(overlay, 0.75, frame, 0.25, 0)
 
-            cv2.putText(frame, f"TOTAL IN: {self.in_count}", (20, 35),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            # --------- TITLE BAR ---------
+            cv2.rectangle(frame, (10, 10), (1010, 50), (40, 40, 40), -1)
+            cv2.rectangle(frame, (10, 10), (1010, 50), (100, 200, 255), 2)
+            
+            cv2.putText(frame, "OBJECT TRACKING SYSTEM", (30, 38),
+                        cv2.FONT_HERSHEY_DUPLEX, 0.9, (255, 255, 255), 2)
+            
+            # Status indicator
+            cv2.circle(frame, (980, 30), 8, (0, 255, 0), -1)
+            cv2.circle(frame, (980, 30), 8, (255, 255, 255), 1)
 
-            cv2.putText(frame, f"TOTAL OUT: {self.out_count}", (240, 35),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+            # --------- MAIN COUNTERS ROW ---------
+            y_pos = 80
+            
+            # IN Counter Box
+            cv2.rectangle(frame, (15, 60), (180, 130), (0, 100, 0), -1)
+            cv2.rectangle(frame, (15, 60), (180, 130), (0, 255, 0), 2)
+            cv2.putText(frame, "IN", (70, 85),
+                        cv2.FONT_HERSHEY_DUPLEX, 0.7, (200, 255, 200), 2)
+            cv2.putText(frame, str(self.in_count), (70, 115),
+                        cv2.FONT_HERSHEY_DUPLEX, 1.2, (255, 255, 255), 3)
 
-            cv2.putText(frame, f"MISSED IN: {len(self.missed_in)}", (20, 65),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 165, 0), 2)
+            # OUT Counter Box
+            cv2.rectangle(frame, (195, 60), (360, 130), (0, 0, 100), -1)
+            cv2.rectangle(frame, (195, 60), (360, 130), (0, 100, 255), 2)
+            cv2.putText(frame, "OUT", (255, 85),
+                        cv2.FONT_HERSHEY_DUPLEX, 0.7, (200, 200, 255), 2)
+            cv2.putText(frame, str(self.out_count), (250, 115),
+                        cv2.FONT_HERSHEY_DUPLEX, 1.2, (255, 255, 255), 3)
 
-            cv2.putText(frame, f"MISSED OUT: {len(self.missed_out)}", (240, 65),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 0, 200), 2)
+            # --------- MISSED TRACKING SECTION ---------
+            # Missed IN
+            cv2.rectangle(frame, (375, 60), (510, 95), (60, 40, 0), -1)
+            cv2.rectangle(frame, (375, 60), (510, 95), (255, 140, 0), 1)
+            cv2.putText(frame, f"Miss IN: {len(self.missed_in)}", (385, 83),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 180, 100), 2)
 
-            cv2.putText(frame, f"MISSED CROSS: {len(self.missed_cross)}", (440, 65),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+            # Missed OUT
+            cv2.rectangle(frame, (375, 100), (510, 130), (60, 0, 60), -1)
+            cv2.rectangle(frame, (375, 100), (510, 130), (200, 0, 200), 1)
+            cv2.putText(frame, f"Miss OUT: {len(self.missed_out)}", (385, 118),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 150, 255), 2)
 
-            x_offset = 520
-            for color, cnt in self.color_in_count.items():
-                cv2.putText(frame, f"IN {color}: {cnt}", (x_offset, 30),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 165, 0), 2)
-                x_offset += 160
+            # Missed CROSS
+            cv2.rectangle(frame, (520, 60), (655, 95), (60, 0, 0), -1)
+            cv2.rectangle(frame, (520, 60), (655, 95), (255, 0, 0), 1)
+            cv2.putText(frame, f"Miss Cross: {len(self.missed_cross)}", (530, 83),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 100, 100), 2)
 
-            x_offset = 520
-            for color, cnt in self.color_out_count.items():
-                cv2.putText(frame, f"OUT {color}: {cnt}", (x_offset, 60),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 0, 200), 2)
-                x_offset += 160
+            # --------- COLOR BREAKDOWN SECTION ---------
+            x_start = 520
+            y_color = 105
+            
+            # Color IN breakdown
+            for idx, (color, cnt) in enumerate(self.color_in_count.items()):
+                x_pos = x_start + (idx * 145)
+                cv2.rectangle(frame, (x_pos, y_color), (x_pos + 140, y_color + 25), (0, 80, 0), -1)
+                cv2.rectangle(frame, (x_pos, y_color), (x_pos + 140, y_color + 25), (0, 200, 0), 1)
+                cv2.putText(frame, f"{color} IN: {cnt}", (x_pos + 8, y_color + 18),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150, 255, 150), 1)
+
+            # Color OUT breakdown (below IN)
+            y_color_out = 105
+            if self.color_out_count:
+                y_color_out = 105 if not self.color_in_count else 133
+                
+            for idx, (color, cnt) in enumerate(self.color_out_count.items()):
+                x_pos = 670 + (idx * 145)
+                y_use = 105 if not self.color_in_count else y_color_out
+                cv2.rectangle(frame, (x_pos, y_use), (x_pos + 140, y_use + 25), (0, 0, 80), -1)
+                cv2.rectangle(frame, (x_pos, y_use), (x_pos + 140, y_use + 25), (100, 100, 255), 1)
+                cv2.putText(frame, f"{color} OUT: {cnt}", (x_pos + 5, y_use + 18),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180, 180, 255), 1)
 
             if self.show:
                 cv2.imshow("ObjectCounter", frame)
