@@ -37,10 +37,10 @@ class ObjectCounter:
         self.out_count = 0
         self.missed_in = 0
         self.missed_out = 0
-        
-        # ---- Track missed IDs for display ----
-        self.missed_track_ids = []
-        self.max_missed_display = 10
+
+        # ---- keeptrack2.py logic addition ----
+        self.miss_threshold = 30  # frames before marking as missed
+        self.active_ids = set()
 
         self.max_missing_frames = 30
         self.frame_count = 0
@@ -259,7 +259,6 @@ class ObjectCounter:
 
     def run(self):
         print("Starting Object Counter...")
-        active_ids = set()
         
         while True:
             if self.is_rtsp:
@@ -307,7 +306,8 @@ class ObjectCounter:
                             "last_seen": self.frame_count,
                             "counted": False,
                             "touched_line": False,
-                            "first_seen": self.frame_count
+                            "first_seen": self.frame_count,
+                            "last_frame": self.frame_count
                         }
                     
                     # Check if near line (within 30 pixels)
@@ -338,6 +338,7 @@ class ObjectCounter:
                     # Update tracking info
                     self.track_info[track_id]["last_side"] = curr_side
                     self.track_info[track_id]["last_seen"] = self.frame_count
+                    self.track_info[track_id]["last_frame"] = self.frame_count
                     self.hist[track_id] = (cx, cy)
 
                     # Draw
@@ -347,15 +348,17 @@ class ObjectCounter:
                     status = "COUNTED" if self.track_info[track_id]["counted"] else "ACTIVE"
                     cvzone.putTextRect(frame, f"ID:{track_id} {status}", (x1,y1), 1, 1)
 
-            # IMPROVED MISSED DETECTION (from misscountdisplay4.py)
-            disappeared = active_ids - visible_ids
+            # IMPROVED MISS DETECTION (from keeptrack2.py)
+            disappeared = self.active_ids - visible_ids
             
             for tid in disappeared:
                 if tid in self.track_info:
                     info = self.track_info[tid]
+                    frames_since = self.frame_count - info.get('last_frame', 0)
                     
                     # Check if object disappeared and not counted yet
-                    if (tid not in self.counted and 
+                    if (frames_since > self.miss_threshold and 
+                        tid not in self.counted and 
                         info.get("touched_line", False) and 
                         tid in self.hist):
                         
@@ -373,16 +376,7 @@ class ObjectCounter:
                             self.out_count += 1
                             missed_type = "MISSED OUT"
                         
-                        # Add to display
-                        self.missed_track_ids.append({
-                            "id": tid,
-                            "type": missed_type,
-                            "frame": self.frame_count
-                        })
-                        
-                        if len(self.missed_track_ids) > self.max_missed_display:
-                            self.missed_track_ids.pop(0)
-                        
+                        self.counted.add(tid)
                         print(f"[MISS] ID:{tid} -> {missed_type}")
                     
                     # Remove track
@@ -391,7 +385,7 @@ class ObjectCounter:
                         del self.hist[tid]
 
             # Update active IDs for next frame
-            active_ids = visible_ids.copy()
+            self.active_ids = visible_ids.copy()
 
             # -------- DISPLAY --------
             cvzone.putTextRect(frame,f"IN: {self.in_count}",(50,30),2,2,colorR=(0,255,0))
@@ -401,21 +395,6 @@ class ObjectCounter:
             cvzone.putTextRect(frame,f"MISSED OUT: {self.missed_out}",(50,180),2,2,colorR=(255,50,50))
             
             cvzone.putTextRect(frame,f"Sessions: {len(self.session_history)}",(50,230),1,1,colorR=(100,100,255))
-            
-            # Display missed track IDs panel
-            if self.missed_track_ids:
-                panel_y = 280
-                cvzone.putTextRect(frame, "MISSED TRACKS:", (50, panel_y), 1, 2, colorR=(255,165,0))
-                
-                panel_y += 40
-                for missed_info in self.missed_track_ids[-5:]:
-                    tid = missed_info["id"]
-                    miss_type = missed_info["type"]
-                    
-                    color = (0, 255, 255) if "IN" in miss_type else (50, 50, 255)
-                    
-                    cvzone.putTextRect(frame, f"ID:{tid} - {miss_type}", (50, panel_y), 1, 1, colorR=color)
-                    panel_y += 25
 
             if self.show:
                 cv2.imshow("ObjectCounter", frame)
@@ -437,7 +416,6 @@ class ObjectCounter:
                 self.out_count = 0
                 self.missed_in = 0
                 self.missed_out = 0
-                self.missed_track_ids = []
                 self.session_start_time = datetime.now()
                 self.current_session_saved = False
                 print("COUNTERS RESET - NEW SESSION STARTED")
