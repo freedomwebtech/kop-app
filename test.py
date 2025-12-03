@@ -46,6 +46,7 @@ class ObjectCounter:
         # ---- Session tracking ----
         self.session_start_time = datetime.now()
         self.session_history = []  # Store all sessions
+        self.current_session_saved = False  # Track if current session is saved
         self.load_session_history()
 
         # ---- line storage ----
@@ -81,17 +82,20 @@ class ObjectCounter:
     def save_to_pdf(self):
         """Save all sessions to a single PDF file (overwrites)"""
         
-        # Add current session to history
-        current_session = {
-            "start": self.session_start_time.strftime("%Y-%m-%d %H:%M:%S"),
-            "end": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "in_count": self.in_count,
-            "out_count": self.out_count,
-            "missed_in": self.missed_in,
-            "missed_out": self.missed_out
-        }
-        self.session_history.append(current_session)
-        self.save_session_history()
+        # Only save if user explicitly pressed 'o'
+        if not self.current_session_saved:
+            # Add current session to history
+            current_session = {
+                "start": self.session_start_time.strftime("%Y-%m-%d %H:%M:%S"),
+                "end": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "in_count": self.in_count,
+                "out_count": self.out_count,
+                "missed_in": self.missed_in,
+                "missed_out": self.missed_out
+            }
+            self.session_history.append(current_session)
+            self.save_session_history()
+            self.current_session_saved = True
         
         # Create PDF
         c = canvas.Canvas(self.pdf_file, pagesize=letter)
@@ -389,6 +393,7 @@ class ObjectCounter:
                 self.missed_in = 0
                 self.missed_out = 0
                 self.session_start_time = datetime.now()
+                self.current_session_saved = False  # Reset for new session
                 print("COUNTERS RESET - NEW SESSION STARTED")
 
             elif key == 27:
