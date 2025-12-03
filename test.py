@@ -1,9 +1,11 @@
 import cv2
 from ultralytics import YOLO
 import cvzone
+import json
+import os
 
 class ObjectCounter:
-    def __init__(self, source=0, model="yolo12n.pt", classes_to_count=[0], show=True):
+    def __init__(self, source=0, model="yolo12n.pt", classes_to_count=[0], show=True, json_file="line_coords.json"):
         self.source = source
         self.model = YOLO(model)
         self.names = self.model.names
@@ -16,15 +18,52 @@ class ObjectCounter:
         self.in_count = 0
         self.out_count = 0
 
-        self.line_p1 = (706, 216)
-        self.line_p2 = (983, 311)
+        # Default line points
+        self.line_p1 = None
+        self.line_p2 = None
+        self.json_file = json_file
+
+        # Load previous line if exists
+        self.load_line()
 
         self.frame_count = 0
         self.show = show
 
+        # Mouse clicks
+        self.temp_points = []
+
+        cv2.namedWindow("ObjectCounter")
+        cv2.setMouseCallback("ObjectCounter", self.mouse_event)
+
     # ----------------- SIDE CHECK FUNCTION -----------------
     def side(self, px, py, x1, y1, x2, y2):
         return (x2 - x1)*(py - y1) - (y2 - y1)*(px - x1)
+
+    # ----------------- MOUSE CALLBACK -----------------
+    def mouse_event(self, event, x, y, flags, param):
+        if event == cv2.EVENT_LBUTTONDOWN:
+            self.temp_points.append((x, y))
+            print(f"Point selected: {x}, {y}")
+            if len(self.temp_points) == 2:
+                self.line_p1, self.line_p2 = self.temp_points
+                self.temp_points = []
+                print(f"Line set: {self.line_p1}, {self.line_p2}")
+                self.save_line()
+
+    # ----------------- SAVE / LOAD LINE -----------------
+    def save_line(self):
+        data = {"line_p1": self.line_p1, "line_p2": self.line_p2}
+        with open(self.json_file, "w") as f:
+            json.dump(data, f)
+        print(f"Line coordinates saved to {self.json_file}")
+
+    def load_line(self):
+        if os.path.exists(self.json_file):
+            with open(self.json_file, "r") as f:
+                data = json.load(f)
+                self.line_p1 = tuple(data["line_p1"])
+                self.line_p2 = tuple(data["line_p2"])
+            print(f"Loaded line from {self.json_file}: {self.line_p1}, {self.line_p2}")
 
     # ----------------- PROCESS ONE FRAME ONLY -----------------
     def __call__(self):
@@ -43,9 +82,17 @@ class ObjectCounter:
 
         frame = cv2.resize(frame, (1020, 600))
 
+        # Draw temporary points if selecting
+        for pt in self.temp_points:
+            cv2.circle(frame, pt, 5, (0, 0, 255), -1)
+
+        # Draw line if exists
+        if self.line_p1 and self.line_p2:
+            cv2.line(frame, self.line_p1, self.line_p2, (255, 255, 255), 2)
+
         results = self.model.track(frame, persist=True, classes=self.classes)
 
-        if results[0].boxes.id is not None:
+        if results[0].boxes.id is not None and self.line_p1 and self.line_p2:
             ids = results[0].boxes.id.cpu().numpy().astype(int)
             boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
             class_ids = results[0].boxes.cls.int().cpu().tolist()
@@ -69,7 +116,7 @@ class ObjectCounter:
 
                 self.hist[track_id] = (cx, cy)
 
-                # Draw
+                # Draw tracking
                 cv2.circle(frame, (cx, cy), 4, (255, 0, 0), -1)
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                 cvzone.putTextRect(frame, f'ID:{track_id}', (x1, y1), 1, 1)
@@ -77,10 +124,21 @@ class ObjectCounter:
         # Display counts
         cvzone.putTextRect(frame, f'IN: {self.in_count}', (50, 30), 2, 2, colorR=(0, 255, 0))
         cvzone.putTextRect(frame, f'OUT: {self.out_count}', (50, 80), 2, 2, colorR=(0, 0, 255))
-        cv2.line(frame, self.line_p1, self.line_p2, (255, 255, 255), 2)
 
         if self.show:
             cv2.imshow("ObjectCounter", frame)
-            cv2.waitKey(1)
+
+            # Press R to reset line
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('r'):
+                print("Resetting line coordinates. Select two new points.")
+                self.line_p1 = None
+                self.line_p2 = None
+                self.temp_points = []
+                self.counted = set()
+                self.in_count = 0
+                self.out_count = 0
+                if os.path.exists(self.json_file):
+                    os.remove(self.json_file)
 
         return frame
