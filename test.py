@@ -15,7 +15,7 @@ class ObjectCounter:
         self.classes = classes_to_count
         self.show = show
 
-        # --- RTSP support ---
+        # --- RTSP or File ---
         if isinstance(source, str) and source.startswith("rtsp://"):
             self.cap = VideoStream(source).start()
             time.sleep(2.0)
@@ -27,8 +27,8 @@ class ObjectCounter:
         # --- Tracking Data ---
         self.hist = {}
         self.last_seen = {}
-        self.counted = set()
         self.crossed_ids = set()
+        self.counted = set()
 
         # --- Counters ---
         self.in_count = 0
@@ -75,7 +75,7 @@ class ObjectCounter:
     def side(self, px, py, x1, y1, x2, y2):
         return (x2 - x1)*(py - y1) - (y2 - y1)*(px - x1)
 
-    # ---------- Lost Object Handler ----------
+    # ---------- Lost Track Handler ----------
     def check_lost_ids(self):
         current = self.frame_count
         lost = []
@@ -90,9 +90,9 @@ class ObjectCounter:
 
             elif tid not in self.counted and tid in self.hist:
                 cx, cy = self.hist[tid]
-                side = self.side(cx, cy, *self.line_p1, *self.line_p2)
+                s = self.side(cx, cy, *self.line_p1, *self.line_p2)
 
-                if side > 0:
+                if s > 0:
                     self.missed_in.add(tid)
                 else:
                     self.missed_out.add(tid)
@@ -133,7 +133,7 @@ class ObjectCounter:
 
                 for tid, box in zip(ids, boxes):
                     x1, y1, x2, y2 = box
-                    cx, cy = int((x1+x2)/2), int((y1+y2)/2)
+                    cx, cy = int((x1 + x2)/2), int((y1 + y2)/2)
 
                     self.last_seen[tid] = self.frame_count
 
@@ -154,9 +154,9 @@ class ObjectCounter:
 
                     self.hist[tid] = (cx, cy)
 
+                    # Draw bounding box (NO ID DISPLAY)
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0,255,0), 2)
                     cv2.circle(frame, (cx, cy), 4, (0,0,255), -1)
-                    cv2.rectangle(frame, (x1,y1), (x2,y2), (0,255,0), 2)
-                    cvzone.putTextRect(frame, f"ID:{tid}", (x1,y1), 1, 1)
 
             if self.line_p1:
                 self.check_lost_ids()
@@ -169,34 +169,21 @@ class ObjectCounter:
             cvzone.putTextRect(frame, f"MISSED OUT: {len(self.missed_out)}", (30,190), 2,2, colorR=(200,0,200))
             cvzone.putTextRect(frame, f"MISSED CROSS: {len(self.missed_cross)}", (30,240), 2,2, colorR=(255,0,0))
 
-            y = 290
-            for tid in list(self.missed_in)[:10]:
-                cvzone.putTextRect(frame, f"MI-{tid}", (30,y), 1,1)
-                y += 25
-
-            for tid in list(self.missed_out)[:10]:
-                cvzone.putTextRect(frame, f"MO-{tid}", (130,y), 1,1)
-                y += 25
-
-            for tid in list(self.missed_cross)[:10]:
-                cvzone.putTextRect(frame, f"MC-{tid}", (230,y), 1,1)
-                y += 25
-
             if self.show:
                 cv2.imshow("ObjectCounter", frame)
                 key = cv2.waitKey(1) & 0xFF
 
                 if key == ord('r'):
-                    print("RESET")
                     self.hist.clear()
                     self.last_seen.clear()
-                    self.counted.clear()
                     self.crossed_ids.clear()
+                    self.counted.clear()
                     self.missed_in.clear()
                     self.missed_out.clear()
                     self.missed_cross.clear()
                     self.in_count = 0
                     self.out_count = 0
+                    print("RESET DONE")
 
                 elif key == 27:
                     break
@@ -208,7 +195,7 @@ class ObjectCounter:
         cv2.destroyAllWindows()
 
 
-# -------------- RUN --------------------
+# ------------------ RUN ------------------
 if __name__ == "__main__":
     source = "rtsp://username:password@ip:554/stream"
     app = ObjectCounter(source, classes_to_count=[0])
