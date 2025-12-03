@@ -108,7 +108,7 @@ class ObjectCounter:
                     curr_side = self.side(cx, cy, *self.line_p1, *self.line_p2)
 
                     if prev_side * curr_side < 0 and track_id not in self.counted:
-                        if curr_side < 0:
+                        if curr_side > 0:
                             self.in_count += 1
                         else:
                             self.out_count += 1
@@ -142,3 +142,4 @@ class ObjectCounter:
                     os.remove(self.json_file)
 
         return frame
+
