@@ -41,6 +41,9 @@ class ObjectCounter:
 
         self.max_missing_frames = 30
         self.frame_count = 0
+        
+        # ---- Session tracking ----
+        self.session_start_time = datetime.now()
 
         # ---- line storage ----
         self.line_p1 = None
@@ -62,7 +65,7 @@ class ObjectCounter:
         
         # Header Background
         c.setFillColorRGB(0.2, 0.4, 0.7)  # Blue header
-        c.rect(0, height - 1.8*inch, width, 1.8*inch, fill=True, stroke=False)
+        c.rect(0, height - 2.2*inch, width, 2.2*inch, fill=True, stroke=False)
         
         # Title
         c.setFillColorRGB(1, 1, 1)  # White text
@@ -73,87 +76,113 @@ class ObjectCounter:
         c.setFont("Helvetica", 12)
         c.drawCentredString(width/2, height - 1.4*inch, "Automated Traffic Monitoring System")
         
-        # Date and Time Box
-        date_str = datetime.now().strftime("%B %d, %Y")
-        time_str = datetime.now().strftime("%I:%M:%S %p")
+        # Session Times
+        session_start = self.session_start_time.strftime("%B %d, %Y - %I:%M:%S %p")
+        session_end = datetime.now().strftime("%B %d, %Y - %I:%M:%S %p")
         
-        c.setFont("Helvetica-Bold", 11)
-        c.drawString(1*inch, height - 2.5*inch, "Report Generated:")
-        c.setFont("Helvetica", 11)
-        c.drawString(1*inch, height - 2.8*inch, f"Date: {date_str}")
-        c.drawString(1*inch, height - 3.1*inch, f"Time: {time_str}")
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(1*inch, height - 1.9*inch, f"Session Start: {session_start}")
+        c.drawString(1*inch, height - 2.1*inch, f"Session End:   {session_end}")
         
-        # Main Data Section - Create Table
-        y_position = height - 4.2*inch
+        # Calculate duration
+        duration = datetime.now() - self.session_start_time
+        hours = duration.seconds // 3600
+        minutes = (duration.seconds % 3600) // 60
+        seconds = duration.seconds % 60
+        duration_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        
+        c.setFillColorRGB(1, 1, 1)
+        c.drawString(width - 3*inch, height - 1.9*inch, f"Duration: {duration_str}")
+        
+        # Main Table Section
+        y_position = height - 3*inch
         
         c.setFont("Helvetica-Bold", 16)
         c.setFillColorRGB(0.2, 0.2, 0.2)
         c.drawString(1*inch, y_position, "Traffic Count Summary")
         
-        # Data boxes with colors
-        box_y = y_position - 0.6*inch
-        box_width = 2.5*inch
-        box_height = 0.8*inch
-        spacing = 0.3*inch
+        # Table Data
+        table_y = y_position - 0.5*inch
         
-        # IN Count Box (Green)
-        c.setFillColorRGB(0.2, 0.7, 0.3)
-        c.rect(1*inch, box_y, box_width, box_height, fill=True, stroke=False)
-        c.setFillColorRGB(1, 1, 1)
-        c.setFont("Helvetica-Bold", 14)
-        c.drawString(1.2*inch, box_y + 0.5*inch, "IN COUNT")
-        c.setFont("Helvetica-Bold", 24)
-        c.drawString(1.2*inch, box_y + 0.15*inch, str(self.in_count))
+        # Table settings
+        col_width = (width - 2*inch) / 2
+        row_height = 0.5*inch
         
-        # OUT Count Box (Red)
-        c.setFillColorRGB(0.9, 0.3, 0.3)
-        c.rect(1*inch + box_width + spacing, box_y, box_width, box_height, fill=True, stroke=False)
-        c.setFillColorRGB(1, 1, 1)
-        c.setFont("Helvetica-Bold", 14)
-        c.drawString(1.2*inch + box_width + spacing, box_y + 0.5*inch, "OUT COUNT")
-        c.setFont("Helvetica-Bold", 24)
-        c.drawString(1.2*inch + box_width + spacing, box_y + 0.15*inch, str(self.out_count))
+        data = [
+            ["Category", "Count"],
+            ["IN Count", str(self.in_count)],
+            ["OUT Count", str(self.out_count)],
+            ["Missed IN", str(self.missed_in)],
+            ["Missed OUT", str(self.missed_out)],
+            ["Total Traffic", str(self.in_count + self.out_count)],
+            ["Net Flow", str(self.in_count - self.out_count)]
+        ]
         
-        # Missed counts boxes
-        box_y2 = box_y - box_height - spacing
+        # Draw table
+        start_x = 1*inch
+        current_y = table_y
         
-        # Missed IN Box (Yellow)
-        c.setFillColorRGB(0.95, 0.8, 0.2)
-        c.rect(1*inch, box_y2, box_width, box_height, fill=True, stroke=False)
+        for i, row in enumerate(data):
+            if i == 0:  # Header row
+                c.setFillColorRGB(0.2, 0.4, 0.7)
+                c.rect(start_x, current_y - row_height, col_width * 2, row_height, fill=True, stroke=False)
+                c.setFillColorRGB(1, 1, 1)
+                c.setFont("Helvetica-Bold", 14)
+            elif i == len(data) - 2 or i == len(data) - 1:  # Total and Net Flow rows
+                c.setFillColorRGB(0.9, 0.9, 0.9)
+                c.rect(start_x, current_y - row_height, col_width * 2, row_height, fill=True, stroke=True)
+                c.setFillColorRGB(0.2, 0.2, 0.2)
+                c.setFont("Helvetica-Bold", 13)
+            else:  # Data rows
+                # Alternating row colors
+                if i % 2 == 1:
+                    c.setFillColorRGB(0.95, 0.95, 0.95)
+                else:
+                    c.setFillColorRGB(1, 1, 1)
+                c.rect(start_x, current_y - row_height, col_width * 2, row_height, fill=True, stroke=True)
+                c.setFillColorRGB(0.2, 0.2, 0.2)
+                c.setFont("Helvetica", 12)
+            
+            # Draw cell borders
+            c.setStrokeColorRGB(0.7, 0.7, 0.7)
+            c.setLineWidth(1)
+            c.rect(start_x, current_y - row_height, col_width, row_height, fill=False, stroke=True)
+            c.rect(start_x + col_width, current_y - row_height, col_width, row_height, fill=False, stroke=True)
+            
+            # Draw text
+            c.drawString(start_x + 0.2*inch, current_y - row_height + 0.15*inch, row[0])
+            
+            # Color code the count values
+            if i > 0:
+                if "IN" in row[0] and "Missed" not in row[0]:
+                    c.setFillColorRGB(0.2, 0.7, 0.3)  # Green for IN
+                elif "OUT" in row[0] and "Missed" not in row[0]:
+                    c.setFillColorRGB(0.9, 0.3, 0.3)  # Red for OUT
+                elif "Missed IN" in row[0]:
+                    c.setFillColorRGB(0.95, 0.7, 0.1)  # Yellow for Missed IN
+                elif "Missed OUT" in row[0]:
+                    c.setFillColorRGB(1, 0.5, 0.1)  # Orange for Missed OUT
+                    
+                if i < len(data) - 2:  # Not total rows
+                    c.setFont("Helvetica-Bold", 14)
+                
+            c.drawString(start_x + col_width + 0.2*inch, current_y - row_height + 0.15*inch, row[1])
+            
+            current_y -= row_height
+        
+        # Statistics Summary Box
+        summary_y = current_y - 0.8*inch
+        c.setFillColorRGB(0.95, 0.95, 1)
+        c.rect(1*inch, summary_y, width - 2*inch, 0.6*inch, fill=True, stroke=True)
+        
         c.setFillColorRGB(0.2, 0.2, 0.2)
-        c.setFont("Helvetica-Bold", 14)
-        c.drawString(1.2*inch, box_y2 + 0.5*inch, "MISSED IN")
-        c.setFont("Helvetica-Bold", 24)
-        c.drawString(1.2*inch, box_y2 + 0.15*inch, str(self.missed_in))
+        c.setFont("Helvetica-Bold", 11)
         
-        # Missed OUT Box (Orange)
-        c.setFillColorRGB(1, 0.6, 0.2)
-        c.rect(1*inch + box_width + spacing, box_y2, box_width, box_height, fill=True, stroke=False)
-        c.setFillColorRGB(1, 1, 1)
-        c.setFont("Helvetica-Bold", 14)
-        c.drawString(1.2*inch + box_width + spacing, box_y2 + 0.5*inch, "MISSED OUT")
-        c.setFont("Helvetica-Bold", 24)
-        c.drawString(1.2*inch + box_width + spacing, box_y2 + 0.15*inch, str(self.missed_out))
+        total_detected = self.in_count + self.out_count + self.missed_in + self.missed_out
+        accuracy = ((self.in_count + self.out_count) / total_detected * 100) if total_detected > 0 else 100
         
-        # Total Summary Box
-        total = self.in_count + self.out_count
-        net = self.in_count - self.out_count
-        
-        summary_y = box_y2 - 1.5*inch
-        c.setFillColorRGB(0.95, 0.95, 0.95)
-        c.rect(1*inch, summary_y, width - 2*inch, 1*inch, fill=True, stroke=True)
-        
-        c.setFillColorRGB(0.2, 0.2, 0.2)
-        c.setFont("Helvetica-Bold", 14)
-        c.drawString(1.3*inch, summary_y + 0.7*inch, "TOTAL TRAFFIC:")
-        c.setFont("Helvetica-Bold", 20)
-        c.drawString(3.5*inch, summary_y + 0.65*inch, str(total))
-        
-        c.setFont("Helvetica-Bold", 14)
-        c.drawString(1.3*inch, summary_y + 0.3*inch, "NET FLOW:")
-        c.setFont("Helvetica-Bold", 20)
-        net_text = f"+{net}" if net > 0 else str(net)
-        c.drawString(3.5*inch, summary_y + 0.25*inch, net_text)
+        c.drawString(1.3*inch, summary_y + 0.35*inch, f"Total Objects Detected: {total_detected}")
+        c.drawString(1.3*inch, summary_y + 0.1*inch, f"Counting Accuracy: {accuracy:.1f}%")
         
         # Footer
         c.setFont("Helvetica-Oblique", 9)
@@ -321,7 +350,8 @@ class ObjectCounter:
                 self.save_to_pdf()
                 self.in_count = 0
                 self.out_count = 0
-                print("IN & OUT COUNTERS RESET")
+                self.session_start_time = datetime.now()  # Reset session time
+                print("IN & OUT COUNTERS RESET - NEW SESSION STARTED")
 
             elif key == 27:
                 break
