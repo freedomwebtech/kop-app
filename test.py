@@ -90,7 +90,7 @@ class ObjectCounter:
         if self.line_p1 and self.line_p2:
             cv2.line(frame, self.line_p1, self.line_p2, (255, 255, 255), 2)
 
-        results = self.model.track(frame, persist=True, classes=self.classes)
+        results = self.model.track(frame, persist=True, classes=self.classes,conf=0.80)
 
         if results[0].boxes.id is not None and self.line_p1 and self.line_p2:
             ids = results[0].boxes.id.cpu().numpy().astype(int)
@@ -142,4 +142,5 @@ class ObjectCounter:
                     os.remove(self.json_file)
 
         return frame
+
 
