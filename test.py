@@ -232,14 +232,14 @@ class ObjectCounter:
             y_offset = 140
             for color, cnt in self.color_in_count.items():
                 cvzone.putTextRect(frame, f"IN {color}: {cnt}",
-                                   (30, y_offset), 2, 2,
+                                   (30, 100), 2, 2,
                                    colorR=(255, 165, 0))
                 y_offset += 50
 
             y_offset = 140
             for color, cnt in self.color_out_count.items():
                 cvzone.putTextRect(frame, f"OUT {color}: {cnt}",
-                                   (30, y_offset), 2, 2,
+                                   (30, 120), 2, 2,
                                    colorR=(200, 0, 200))
                 y_offset += 50
 
