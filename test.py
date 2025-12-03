@@ -216,93 +216,87 @@ class ObjectCounter:
             if self.line_p1:
                 self.check_lost_ids()
 
-            # ================= CLEAN HORIZONTAL TOP PANEL =================
+            # ================= MINIMAL COMPACT TOP DISPLAY =================
 
-            # Create light transparent overlay - user la video pan dishel
+            # Ultra light transparent overlay
             overlay = frame.copy()
-            cv2.rectangle(overlay, (0, 0), (1020, 90), (15, 15, 15), -1)
-            frame = cv2.addWeighted(overlay, 0.5, frame, 0.5, 0)
+            cv2.rectangle(overlay, (0, 0), (1020, 65), (10, 10, 10), -1)
+            frame = cv2.addWeighted(overlay, 0.35, frame, 0.65, 0)
 
-            # --------- TITLE BAR ---------
-            cv2.rectangle(frame, (8, 8), (1012, 38), (30, 30, 30), -1)
-            cv2.rectangle(frame, (8, 8), (1012, 38), (80, 180, 255), 2)
-            
-            cv2.putText(frame, "OBJECT TRACKING SYSTEM", (25, 28),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            
-            # Live status indicator
-            cv2.circle(frame, (985, 23), 6, (0, 255, 0), -1)
-            cv2.circle(frame, (985, 23), 6, (255, 255, 255), 1)
+            # --------- TITLE BAR (Compact) ---------
+            cv2.rectangle(frame, (5, 5), (250, 28), (25, 25, 25), -1)
+            cv2.rectangle(frame, (5, 5), (250, 28), (70, 160, 255), 1)
+            cv2.putText(frame, "TRACKING SYSTEM", (15, 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            cv2.circle(frame, (240, 16), 4, (0, 255, 0), -1)
 
-            # --------- MAIN COUNTERS - HORIZONTAL WITH GAPS ---------
-            y_top = 48
-            y_bottom = 82
-            box_width = 105
-            gap = 12
+            # --------- COUNTERS ROW (Minimal) ---------
+            y_top = 35
+            y_bottom = 60
+            box_width = 85
+            gap = 8
             
             # TOTAL IN
-            x1 = 10
-            cv2.rectangle(frame, (x1, y_top), (x1 + box_width, y_bottom), (0, 80, 0), -1)
-            cv2.rectangle(frame, (x1, y_top), (x1 + box_width, y_bottom), (0, 255, 0), 2)
-            cv2.putText(frame, "TOTAL IN", (x1 + 12, y_top + 16),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 255, 180), 1)
-            cv2.putText(frame, str(self.in_count), (x1 + 35, y_top + 30),
-                        cv2.FONT_HERSHEY_DUPLEX, 0.9, (255, 255, 255), 2)
+            x1 = 5
+            cv2.rectangle(frame, (x1, y_top), (x1 + box_width, y_bottom), (0, 70, 0), -1)
+            cv2.rectangle(frame, (x1, y_top), (x1 + box_width, y_bottom), (0, 255, 0), 1)
+            cv2.putText(frame, "IN", (x1 + 8, y_top + 12),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (180, 255, 180), 1)
+            cv2.putText(frame, str(self.in_count), (x1 + 30, y_top + 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
             # TOTAL OUT
             x2 = x1 + box_width + gap
-            cv2.rectangle(frame, (x2, y_top), (x2 + box_width, y_bottom), (0, 0, 80), -1)
-            cv2.rectangle(frame, (x2, y_top), (x2 + box_width, y_bottom), (0, 120, 255), 2)
-            cv2.putText(frame, "TOTAL OUT", (x2 + 8, y_top + 16),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 200, 255), 1)
-            cv2.putText(frame, str(self.out_count), (x2 + 35, y_top + 30),
-                        cv2.FONT_HERSHEY_DUPLEX, 0.9, (255, 255, 255), 2)
+            cv2.rectangle(frame, (x2, y_top), (x2 + box_width, y_bottom), (0, 0, 70), -1)
+            cv2.rectangle(frame, (x2, y_top), (x2 + box_width, y_bottom), (0, 120, 255), 1)
+            cv2.putText(frame, "OUT", (x2 + 8, y_top + 12),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (180, 200, 255), 1)
+            cv2.putText(frame, str(self.out_count), (x2 + 30, y_top + 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
             # MISSED IN
             x3 = x2 + box_width + gap
-            cv2.rectangle(frame, (x3, y_top), (x3 + box_width, y_bottom), (50, 35, 0), -1)
-            cv2.rectangle(frame, (x3, y_top), (x3 + box_width, y_bottom), (255, 150, 0), 2)
-            cv2.putText(frame, "MISSED IN", (x3 + 6, y_top + 16),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 200, 120), 1)
-            cv2.putText(frame, str(len(self.missed_in)), (x3 + 35, y_top + 30),
-                        cv2.FONT_HERSHEY_DUPLEX, 0.9, (255, 255, 255), 2)
+            cv2.rectangle(frame, (x3, y_top), (x3 + box_width, y_bottom), (45, 30, 0), -1)
+            cv2.rectangle(frame, (x3, y_top), (x3 + box_width, y_bottom), (255, 150, 0), 1)
+            cv2.putText(frame, "Miss IN", (x3 + 8, y_top + 12),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 200, 120), 1)
+            cv2.putText(frame, str(len(self.missed_in)), (x3 + 30, y_top + 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
             # MISSED OUT
             x4 = x3 + box_width + gap
-            cv2.rectangle(frame, (x4, y_top), (x4 + box_width, y_bottom), (50, 0, 50), -1)
-            cv2.rectangle(frame, (x4, y_top), (x4 + box_width, y_bottom), (220, 0, 220), 2)
-            cv2.putText(frame, "MISSED OUT", (x4 + 3, y_top + 16),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 180, 255), 1)
-            cv2.putText(frame, str(len(self.missed_out)), (x4 + 35, y_top + 30),
-                        cv2.FONT_HERSHEY_DUPLEX, 0.9, (255, 255, 255), 2)
+            cv2.rectangle(frame, (x4, y_top), (x4 + box_width, y_bottom), (45, 0, 45), -1)
+            cv2.rectangle(frame, (x4, y_top), (x4 + box_width, y_bottom), (220, 0, 220), 1)
+            cv2.putText(frame, "Miss OUT", (x4 + 5, y_top + 12),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 180, 255), 1)
+            cv2.putText(frame, str(len(self.missed_out)), (x4 + 30, y_top + 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
             # MISS CROSS
             x5 = x4 + box_width + gap
-            cv2.rectangle(frame, (x5, y_top), (x5 + box_width, y_bottom), (50, 0, 0), -1)
-            cv2.rectangle(frame, (x5, y_top), (x5 + box_width, y_bottom), (255, 0, 0), 2)
-            cv2.putText(frame, "MISS CROSS", (x5 + 4, y_top + 16),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 120, 120), 1)
-            cv2.putText(frame, str(len(self.missed_cross)), (x5 + 35, y_top + 30),
-                        cv2.FONT_HERSHEY_DUPLEX, 0.9, (255, 255, 255), 2)
+            cv2.rectangle(frame, (x5, y_top), (x5 + box_width, y_bottom), (45, 0, 0), -1)
+            cv2.rectangle(frame, (x5, y_top), (x5 + box_width, y_bottom), (255, 0, 0), 1)
+            cv2.putText(frame, "Cross", (x5 + 8, y_top + 12),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 120, 120), 1)
+            cv2.putText(frame, str(len(self.missed_cross)), (x5 + 30, y_top + 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
-            # --------- COLOR BREAKDOWN (COMPACT & HORIZONTAL) ---------
-            x_color = x5 + box_width + gap + 5
+            # --------- COLOR BREAKDOWN (Ultra Compact) ---------
+            x_color = x5 + box_width + gap + 3
             
-            # Color IN
             for idx, (color, cnt) in enumerate(self.color_in_count.items()):
-                x_pos = x_color + (idx * 95)
-                cv2.rectangle(frame, (x_pos, y_top), (x_pos + 90, y_top + 15), (0, 70, 0), -1)
-                cv2.rectangle(frame, (x_pos, y_top), (x_pos + 90, y_top + 15), (0, 200, 0), 1)
-                cv2.putText(frame, f"{color} IN: {cnt}", (x_pos + 4, y_top + 11),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.38, (180, 255, 180), 1)
+                x_pos = x_color + (idx * 75)
+                cv2.rectangle(frame, (x_pos, y_top), (x_pos + 72, y_top + 11), (0, 60, 0), -1)
+                cv2.rectangle(frame, (x_pos, y_top), (x_pos + 72, y_top + 11), (0, 200, 0), 1)
+                cv2.putText(frame, f"{color} IN:{cnt}", (x_pos + 3, y_top + 8),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.3, (180, 255, 180), 1)
 
-            # Color OUT
             for idx, (color, cnt) in enumerate(self.color_out_count.items()):
-                x_pos = x_color + (idx * 95)
-                cv2.rectangle(frame, (x_pos, y_top + 19), (x_pos + 90, y_bottom), (0, 0, 70), -1)
-                cv2.rectangle(frame, (x_pos, y_top + 19), (x_pos + 90, y_bottom), (120, 120, 255), 1)
-                cv2.putText(frame, f"{color} OUT: {cnt}", (x_pos + 4, y_top + 30),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 200, 255), 1)
+                x_pos = x_color + (idx * 75)
+                cv2.rectangle(frame, (x_pos, y_top + 14), (x_pos + 72, y_bottom), (0, 0, 60), -1)
+                cv2.rectangle(frame, (x_pos, y_top + 14), (x_pos + 72, y_bottom), (120, 120, 255), 1)
+                cv2.putText(frame, f"{color} OUT:{cnt}", (x_pos + 3, y_top + 22),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.3, (200, 200, 255), 1)
 
             if self.show:
                 cv2.imshow("ObjectCounter", frame)
