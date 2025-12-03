@@ -9,8 +9,6 @@ from datetime import datetime
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import inch
-from reportlab.lib import colors
-from reportlab.platypus import Table, TableStyle
 
 class ObjectCounter:
     def __init__(self, source, model="yolo12n.pt", classes_to_count=[0], show=True, json_file="line_coords.json", pdf_file="count_report.pdf"):
@@ -40,9 +38,9 @@ class ObjectCounter:
         self.missed_in = 0
         self.missed_out = 0
         
-        # ---- NEW: Track missed IDs for display ----
-        self.missed_track_ids = []  # Store recently missed track IDs
-        self.max_missed_display = 10  # Maximum number of missed IDs to show
+        # ---- Track missed IDs for display ----
+        self.missed_track_ids = []
+        self.max_missed_display = 10
 
         self.max_missing_frames = 30
         self.frame_count = 0
@@ -63,7 +61,6 @@ class ObjectCounter:
         cv2.namedWindow("ObjectCounter")
         cv2.setMouseCallback("ObjectCounter", self.mouse_event)
 
-    # ---------------- Load Session History ----------------
     def load_session_history(self):
         """Load previous session data from JSON"""
         history_file = "session_history.json"
@@ -75,14 +72,12 @@ class ObjectCounter:
             except:
                 self.session_history = []
 
-    # ---------------- Save Session History ----------------
     def save_session_history(self):
         """Save session data to JSON"""
         history_file = "session_history.json"
         with open(history_file, "w") as f:
             json.dump(self.session_history, f, indent=2)
 
-    # ---------------- Save to PDF ----------------
     def save_to_pdf(self):
         """Save all sessions to a single PDF file (overwrites)"""
         
@@ -228,7 +223,6 @@ class ObjectCounter:
         print(f"✓ Report saved to: {self.pdf_file} (Contains {len(self.session_history)} sessions)")
         return self.pdf_file
 
-    # ---------------- Mouse ----------------
     def mouse_event(self, event, x, y, flags, param):
         if event == cv2.EVENT_LBUTTONDOWN:
             self.temp_points.append((x, y))
@@ -239,7 +233,6 @@ class ObjectCounter:
                 self.save_line()
                 print(f"Line set: {self.line_p1},{self.line_p2}")
 
-    # ---------------- Save/Load ----------------
     def save_line(self):
         with open(self.json_file, "w") as f:
             json.dump({"line_p1": self.line_p1, "line_p2": self.line_p2}, f)
@@ -252,11 +245,9 @@ class ObjectCounter:
                 self.line_p2 = tuple(data["line_p2"])
                 print("Loaded saved line:", self.line_p1, self.line_p2)
 
-    # ---------------- Side Check ----------------
     def side(self, px, py, x1, y1, x2, y2):
         return (x2 - x1)*(py - y1) - (y2 - y1)*(px - x1)
 
-    # ---------------- Main Loop ----------------
     def run(self):
         print("Starting Object Counter...")
         while True:
@@ -273,7 +264,6 @@ class ObjectCounter:
 
             frame = cv2.resize(frame, (1020, 600))
 
-            # temp points
             for pt in self.temp_points:
                 cv2.circle(frame, pt, 5, (0,0,255), -1)
 
@@ -298,21 +288,33 @@ class ObjectCounter:
 
                     curr_side = self.side(cx, cy, *self.line_p1, *self.line_p2)
 
-                    # create track record
+                    # ===== FIX 1: Better initialization =====
                     if track_id not in self.track_info:
                         self.track_info[track_id] = {
                             "first_side": curr_side,
                             "last_side": curr_side,
                             "last_seen": self.frame_count,
-                            "counted": False
+                            "counted": False,
+                            "crossed_line": False,  # NEW: Track if actually crossed
+                            "side_history": [curr_side]  # NEW: Track side changes
                         }
+                    
+                    # ===== FIX 2: Update side history =====
+                    self.track_info[track_id]["side_history"].append(curr_side)
+                    
+                    # Keep only recent history (last 10 frames)
+                    if len(self.track_info[track_id]["side_history"]) > 10:
+                        self.track_info[track_id]["side_history"].pop(0)
 
-                    # crossing logic
+                    # ===== FIX 3: Crossing detection with previous position =====
                     if track_id in self.hist:
                         prev_cx, prev_cy = self.hist[track_id]
                         prev_side = self.side(prev_cx, prev_cy, *self.line_p1, *self.line_p2)
 
+                        # Check if crossed the line (signs differ)
                         if prev_side * curr_side < 0 and not self.track_info[track_id]["counted"]:
+                            self.track_info[track_id]["crossed_line"] = True
+                            
                             if curr_side > 0:
                                 self.in_count += 1
                                 direction = "IN"
@@ -322,52 +324,72 @@ class ObjectCounter:
 
                             self.track_info[track_id]["counted"] = True
                             self.counted.add(track_id)
-                            print(f"[COUNT] {track_id} -> {direction}")
+                            print(f"[COUNT] ID:{track_id} -> {direction}")
 
+                    # Update tracking info
                     self.track_info[track_id]["last_side"] = curr_side
                     self.track_info[track_id]["last_seen"] = self.frame_count
                     self.hist[track_id] = (cx, cy)
 
-                    # draw
+                    # Draw
                     cv2.rectangle(frame,(x1,y1),(x2,y2),(0,255,0),2)
                     cv2.circle(frame,(cx,cy),4,(255,0,0),-1)
 
                     status = "COUNTED" if self.track_info[track_id]["counted"] else "ACTIVE"
                     cvzone.putTextRect(frame, f"ID:{track_id} {status}", (x1,y1), 1, 1)
 
-            # -------- MISSED CHECK --------
+            # ===== FIX 4: IMPROVED MISSED DETECTION =====
             for tid in list(self.track_info.keys()):
                 info = self.track_info[tid]
 
+                # Check if object disappeared
                 if tid not in visible_ids and (self.frame_count - info["last_seen"] > self.max_missing_frames):
 
-                    if not info["counted"]:
-                        if tid in self.hist:
-                            first_side = info["first_side"]
-                            last_side = info["last_side"]
+                    # If not counted yet, check if it likely crossed
+                    if not info["counted"] and tid in self.hist:
+                        
+                        # Method 1: Check side history for crossing pattern
+                        side_history = info.get("side_history", [])
+                        
+                        # Check if there was a sign change in side history
+                        crossed_in_history = False
+                        if len(side_history) >= 2:
+                            for i in range(len(side_history) - 1):
+                                if side_history[i] * side_history[i+1] < 0:
+                                    crossed_in_history = True
+                                    break
+                        
+                        # Method 2: Compare first and last positions
+                        first_side = info["first_side"]
+                        last_side = info["last_side"]
+                        
+                        # If crossed (either in history OR different first/last sides)
+                        if crossed_in_history or (first_side * last_side < 0):
                             
-                            if first_side * last_side < 0:
-                                if last_side > 0:
-                                    self.missed_in += 1
-                                    missed = "MISSED IN"
-                                else:
-                                    self.missed_out += 1
-                                    missed = "MISSED OUT"
-                                
-                                # ---- NEW: Add to missed display list ----
-                                self.missed_track_ids.append({
-                                    "id": tid,
-                                    "type": missed,
-                                    "frame": self.frame_count
-                                })
-                                
-                                # Keep only recent missed IDs
-                                if len(self.missed_track_ids) > self.max_missed_display:
-                                    self.missed_track_ids.pop(0)
-                                
-                                print(f"[MISS] {tid} -> {missed}")
+                            # Determine direction based on last known side
+                            if last_side > 0:
+                                self.missed_in += 1
+                                missed_type = "MISSED IN"
+                            else:
+                                self.missed_out += 1
+                                missed_type = "MISSED OUT"
+                            
+                            # Add to display
+                            self.missed_track_ids.append({
+                                "id": tid,
+                                "type": missed_type,
+                                "frame": self.frame_count
+                            })
+                            
+                            if len(self.missed_track_ids) > self.max_missed_display:
+                                self.missed_track_ids.pop(0)
+                            
+                            print(f"[MISS] ID:{tid} -> {missed_type} (first:{first_side:.1f}, last:{last_side:.1f})")
 
+                    # Remove track
                     del self.track_info[tid]
+                    if tid in self.hist:
+                        del self.hist[tid]
 
             # -------- DISPLAY --------
             cvzone.putTextRect(frame,f"IN: {self.in_count}",(50,30),2,2,colorR=(0,255,0))
@@ -378,21 +400,17 @@ class ObjectCounter:
             
             cvzone.putTextRect(frame,f"Sessions: {len(self.session_history)}",(50,230),1,1,colorR=(100,100,255))
             
-            # -------- NEW: DISPLAY MISSED TRACK IDs PANEL --------
+            # Display missed track IDs panel
             if self.missed_track_ids:
                 panel_y = 280
                 cvzone.putTextRect(frame, "MISSED TRACKS:", (50, panel_y), 1, 2, colorR=(255,165,0))
                 
                 panel_y += 40
-                for missed_info in self.missed_track_ids[-5:]:  # Show last 5
+                for missed_info in self.missed_track_ids[-5:]:
                     tid = missed_info["id"]
                     miss_type = missed_info["type"]
                     
-                    # Color based on type
-                    if "IN" in miss_type:
-                        color = (0, 255, 255)  # Yellow
-                    else:
-                        color = (50, 50, 255)  # Red
+                    color = (0, 255, 255) if "IN" in miss_type else (50, 50, 255)
                     
                     cvzone.putTextRect(frame, f"ID:{tid} - {miss_type}", (50, panel_y), 1, 1, colorR=color)
                     panel_y += 25
@@ -417,7 +435,7 @@ class ObjectCounter:
                 self.out_count = 0
                 self.missed_in = 0
                 self.missed_out = 0
-                self.missed_track_ids = []  # Clear missed track display
+                self.missed_track_ids = []
                 self.session_start_time = datetime.now()
                 self.current_session_saved = False
                 print("COUNTERS RESET - NEW SESSION STARTED")
@@ -425,7 +443,7 @@ class ObjectCounter:
             elif key == 27:
                 break
 
-        # -------- CLEANUP --------
+        # Cleanup
         if self.is_rtsp:
             self.cap.stop()
         else:
@@ -433,8 +451,7 @@ class ObjectCounter:
         cv2.destroyAllWindows()
         print("Stopped.")
 
-# ---------------- RUN ----------------
 if __name__ == "__main__":
-    src = 0   # 0 for webcam or "rtsp://...." or video file path
+    src = 0
     counter = ObjectCounter(source=src, model="yolo12n.pt", classes_to_count=[0], show=True)
     counter.run()
