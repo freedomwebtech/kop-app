@@ -77,6 +77,10 @@ class ObjectCounter:
         self.color_in_count = {}
         self.color_out_count = {}
 
+        # ✅ MISSED LOGIC ADDED
+        self.missed_in = set()
+        self.missed_out = set()
+        self.missed_cross = set()
         self.max_missing_frames = 40
 
         # -------- Line --------
@@ -116,6 +120,31 @@ class ObjectCounter:
     def side(self, px, py, x1, y1, x2, y2):
         return (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
 
+    # ================= MISSED TRACK HANDLER (FROM OLD CODE) =================
+    def check_lost_ids(self):
+        current = self.frame_count
+        lost = []
+
+        for tid, last in self.last_seen.items():
+            if current - last > self.max_missing_frames:
+                lost.append(tid)
+
+        for tid in lost:
+            if tid in self.crossed_ids and tid not in self.counted:
+                self.missed_cross.add(tid)
+
+            elif tid not in self.counted and tid in self.hist:
+                cx, cy = self.hist[tid]
+                s = self.side(cx, cy, *self.line_p1, *self.line_p2)
+
+                if s > 0:
+                    self.missed_in.add(tid)
+                else:
+                    self.missed_out.add(tid)
+
+            self.hist.pop(tid, None)
+            self.last_seen.pop(tid, None)
+
     # ---------------- Main Loop ----------------
     def run(self):
         print("RUNNING... Press R to Reset | ESC to Exit")
@@ -141,7 +170,6 @@ class ObjectCounter:
                 cv2.line(frame, self.line_p1, self.line_p2,
                          (255, 255, 255), 2)
 
-            # -------- YOLO Tracking --------
             results = self.model.track(
                 frame, persist=True, classes=self.classes, conf=0.7)
 
@@ -154,6 +182,7 @@ class ObjectCounter:
                     cx = int((x1 + x2) / 2)
                     cy = int((y1 + y2) / 2)
 
+                    self.last_seen[tid] = self.frame_count
                     color_name = detect_box_color(frame, box)
 
                     if tid in self.hist:
@@ -162,6 +191,8 @@ class ObjectCounter:
                         s2 = self.side(cx, cy, *self.line_p1, *self.line_p2)
 
                         if s1 * s2 < 0:
+                            self.crossed_ids.add(tid)
+
                             if tid not in self.counted:
                                 if s2 > 0:
                                     self.in_count += 1
@@ -169,11 +200,11 @@ class ObjectCounter:
                                 else:
                                     self.out_count += 1
                                     self.color_out_count[color_name] = self.color_out_count.get(color_name, 0) + 1
+
                                 self.counted.add(tid)
 
                     self.hist[tid] = (cx, cy)
 
-                    # -------- Draw Box + Label --------
                     cv2.rectangle(frame, (x1, y1),
                                   (x2, y2), (0, 255, 0), 2)
 
@@ -181,11 +212,14 @@ class ObjectCounter:
                                 cv2.FONT_HERSHEY_SIMPLEX,
                                 0.6, (255, 200, 0), 2)
 
-            # ---------------- TRANSPARENT TOP DISPLAY PANEL ----------------
+            # ✅ MISSED CHECK ACTIVE
+            if self.line_p1:
+                self.check_lost_ids()
+
+            # ================= TRANSPARENT TOP PANEL =================
 
             overlay = frame.copy()
-            panel_height = 80
-            cv2.rectangle(overlay, (0, 0), (1020, panel_height), (0, 0, 0), -1)
+            cv2.rectangle(overlay, (0, 0), (1020, 80), (0, 0, 0), -1)
             frame = cv2.addWeighted(overlay, 0.5, frame, 0.5, 0)
 
             cv2.putText(frame, f"TOTAL IN: {self.in_count}", (20, 35),
@@ -193,6 +227,15 @@ class ObjectCounter:
 
             cv2.putText(frame, f"TOTAL OUT: {self.out_count}", (240, 35),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+
+            cv2.putText(frame, f"MISSED IN: {len(self.missed_in)}", (20, 65),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 165, 0), 2)
+
+            cv2.putText(frame, f"MISSED OUT: {len(self.missed_out)}", (240, 65),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 0, 200), 2)
+
+            cv2.putText(frame, f"MISSED CROSS: {len(self.missed_cross)}", (440, 65),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
 
             x_offset = 520
             for color, cnt in self.color_in_count.items():
@@ -206,8 +249,6 @@ class ObjectCounter:
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 0, 200), 2)
                 x_offset += 160
 
-            # ---------------- SHOW FRAME ----------------
-
             if self.show:
                 cv2.imshow("ObjectCounter", frame)
                 key = cv2.waitKey(1) & 0xFF
@@ -219,6 +260,9 @@ class ObjectCounter:
                     self.counted.clear()
                     self.color_in_count.clear()
                     self.color_out_count.clear()
+                    self.missed_in.clear()
+                    self.missed_out.clear()
+                    self.missed_cross.clear()
                     self.in_count = 0
                     self.out_count = 0
                     print("✅ RESET DONE")
