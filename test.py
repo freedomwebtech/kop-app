@@ -189,15 +189,10 @@ class ObjectCounter:
             key = cv2.waitKey(1) & 0xFF
 
             if key == ord('r'):
-                print("RESETED LINE & COUNTS")
+                print("RESET LINE ONLY")
                 self.line_p1 = None
                 self.line_p2 = None
                 self.temp_points = []
-                self.hist.clear()
-                self.counted.clear()
-                self.track_info.clear()
-                self.in_count = self.out_count = 0
-                self.missed_in = self.missed_out = 0
                 if os.path.exists(self.json_file):
                     os.remove(self.json_file)
 
