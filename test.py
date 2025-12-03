@@ -163,10 +163,10 @@ class ObjectCounter:
                         start = info["first_side"]
                         end = info["last_side"]
 
-                        if start > 0 and end > 0:
+                        if start < 0 and end < 0:
                             self.missed_out += 1
                             missed = "MISSED OUT"
-                        elif start < 0 and end < 0:
+                        elif start > 0 and end > 0:
                             self.missed_in += 1
                             missed = "MISSED IN"
                         else:
