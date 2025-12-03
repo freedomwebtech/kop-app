@@ -13,12 +13,13 @@ from reportlab.lib import colors
 from reportlab.platypus import Table, TableStyle
 
 class ObjectCounter:
-    def __init__(self, source, model="yolo12n.pt", classes_to_count=[0], show=True, json_file="line_coords.json"):
+    def __init__(self, source, model="yolo12n.pt", classes_to_count=[0], show=True, json_file="line_coords.json", pdf_file="count_report.pdf"):
         self.source = source
         self.model = YOLO(model)
         self.names = self.model.names
         self.classes = classes_to_count
         self.show = show
+        self.pdf_file = pdf_file  # Fixed PDF filename
 
         # ---- RTSP ----
         if isinstance(source, str) and source.startswith("rtsp://"):
@@ -44,6 +45,8 @@ class ObjectCounter:
         
         # ---- Session tracking ----
         self.session_start_time = datetime.now()
+        self.session_history = []  # Store all sessions
+        self.load_session_history()
 
         # ---- line storage ----
         self.line_p1 = None
@@ -55,134 +58,166 @@ class ObjectCounter:
         cv2.namedWindow("ObjectCounter")
         cv2.setMouseCallback("ObjectCounter", self.mouse_event)
 
+    # ---------------- Load Session History ----------------
+    def load_session_history(self):
+        """Load previous session data from JSON"""
+        history_file = "session_history.json"
+        if os.path.exists(history_file):
+            try:
+                with open(history_file, "r") as f:
+                    self.session_history = json.load(f)
+                print(f"Loaded {len(self.session_history)} previous sessions")
+            except:
+                self.session_history = []
+
+    # ---------------- Save Session History ----------------
+    def save_session_history(self):
+        """Save session data to JSON"""
+        history_file = "session_history.json"
+        with open(history_file, "w") as f:
+            json.dump(self.session_history, f, indent=2)
+
     # ---------------- Save to PDF ----------------
     def save_to_pdf(self):
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"count_report_{timestamp}.pdf"
+        """Save all sessions to a single PDF file (overwrites)"""
         
-        c = canvas.Canvas(filename, pagesize=letter)
+        # Add current session to history
+        current_session = {
+            "start": self.session_start_time.strftime("%Y-%m-%d %H:%M:%S"),
+            "end": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "in_count": self.in_count,
+            "out_count": self.out_count,
+            "missed_in": self.missed_in,
+            "missed_out": self.missed_out
+        }
+        self.session_history.append(current_session)
+        self.save_session_history()
+        
+        # Create PDF
+        c = canvas.Canvas(self.pdf_file, pagesize=letter)
         width, height = letter
         
         # Header Background
-        c.setFillColorRGB(0.2, 0.4, 0.7)  # Blue header
+        c.setFillColorRGB(0.2, 0.4, 0.7)
         c.rect(0, height - 2.2*inch, width, 2.2*inch, fill=True, stroke=False)
         
         # Title
-        c.setFillColorRGB(1, 1, 1)  # White text
+        c.setFillColorRGB(1, 1, 1)
         c.setFont("Helvetica-Bold", 28)
         c.drawCentredString(width/2, height - 1*inch, "OBJECT COUNTER REPORT")
         
-        # Subtitle line
+        # Subtitle
         c.setFont("Helvetica", 12)
         c.drawCentredString(width/2, height - 1.4*inch, "Automated Traffic Monitoring System")
         
-        # Session Times
-        session_start = self.session_start_time.strftime("%B %d, %Y - %I:%M:%S %p")
-        session_end = datetime.now().strftime("%B %d, %Y - %I:%M:%S %p")
-        
+        # Report generation time
         c.setFont("Helvetica-Bold", 10)
-        c.drawString(1*inch, height - 1.9*inch, f"Session Start: {session_start}")
-        c.drawString(1*inch, height - 2.1*inch, f"Session End:   {session_end}")
+        c.drawCentredString(width/2, height - 1.8*inch, f"Report Generated: {datetime.now().strftime('%B %d, %Y - %I:%M:%S %p')}")
         
-        # Calculate duration
-        duration = datetime.now() - self.session_start_time
-        hours = duration.seconds // 3600
-        minutes = (duration.seconds % 3600) // 60
-        seconds = duration.seconds % 60
-        duration_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        y_position = height - 2.8*inch
         
-        c.setFillColorRGB(1, 1, 1)
-        c.drawString(width - 3*inch, height - 1.9*inch, f"Duration: {duration_str}")
-        
-        # Main Table Section
-        y_position = height - 3*inch
-        
+        # ============ ALL SESSIONS TABLE ============
         c.setFont("Helvetica-Bold", 16)
         c.setFillColorRGB(0.2, 0.2, 0.2)
-        c.drawString(1*inch, y_position, "Traffic Count Summary")
+        c.drawString(1*inch, y_position, f"All Sessions Summary ({len(self.session_history)} Total)")
         
-        # Table Data
-        table_y = y_position - 0.5*inch
+        y_position -= 0.4*inch
         
-        # Table settings
+        # Calculate totals
+        total_in = sum(s["in_count"] for s in self.session_history)
+        total_out = sum(s["out_count"] for s in self.session_history)
+        total_missed_in = sum(s["missed_in"] for s in self.session_history)
+        total_missed_out = sum(s["missed_out"] for s in self.session_history)
+        
+        # Grand totals table
         col_width = (width - 2*inch) / 2
-        row_height = 0.5*inch
+        row_height = 0.4*inch
         
-        data = [
-            ["Category", "Count"],
-            ["IN Count", str(self.in_count)],
-            ["OUT Count", str(self.out_count)],
-            ["Missed IN", str(self.missed_in)],
-            ["Missed OUT", str(self.missed_out)],
-            ["Total Traffic", str(self.in_count + self.out_count)],
-            ["Net Flow", str(self.in_count - self.out_count)]
+        grand_data = [
+            ["Total Metric", "Count"],
+            ["Total IN", str(total_in)],
+            ["Total OUT", str(total_out)],
+            ["Total Missed IN", str(total_missed_in)],
+            ["Total Missed OUT", str(total_missed_out)],
+            ["Grand Total Traffic", str(total_in + total_out)],
+            ["Net Flow", str(total_in - total_out)]
         ]
         
-        # Draw table
         start_x = 1*inch
-        current_y = table_y
+        current_y = y_position
         
-        for i, row in enumerate(data):
-            if i == 0:  # Header row
+        for i, row in enumerate(grand_data):
+            if i == 0:  # Header
                 c.setFillColorRGB(0.2, 0.4, 0.7)
                 c.rect(start_x, current_y - row_height, col_width * 2, row_height, fill=True, stroke=False)
                 c.setFillColorRGB(1, 1, 1)
-                c.setFont("Helvetica-Bold", 14)
-            elif i == len(data) - 2 or i == len(data) - 1:  # Total and Net Flow rows
-                c.setFillColorRGB(0.9, 0.9, 0.9)
+                c.setFont("Helvetica-Bold", 12)
+            else:
+                c.setFillColorRGB(0.95, 0.95, 0.95) if i % 2 == 0 else c.setFillColorRGB(1, 1, 1)
                 c.rect(start_x, current_y - row_height, col_width * 2, row_height, fill=True, stroke=True)
                 c.setFillColorRGB(0.2, 0.2, 0.2)
-                c.setFont("Helvetica-Bold", 13)
-            else:  # Data rows
-                # Alternating row colors
-                if i % 2 == 1:
-                    c.setFillColorRGB(0.95, 0.95, 0.95)
-                else:
-                    c.setFillColorRGB(1, 1, 1)
-                c.rect(start_x, current_y - row_height, col_width * 2, row_height, fill=True, stroke=True)
-                c.setFillColorRGB(0.2, 0.2, 0.2)
-                c.setFont("Helvetica", 12)
+                c.setFont("Helvetica", 11)
             
-            # Draw cell borders
             c.setStrokeColorRGB(0.7, 0.7, 0.7)
             c.setLineWidth(1)
             c.rect(start_x, current_y - row_height, col_width, row_height, fill=False, stroke=True)
             c.rect(start_x + col_width, current_y - row_height, col_width, row_height, fill=False, stroke=True)
             
-            # Draw text
-            c.drawString(start_x + 0.2*inch, current_y - row_height + 0.15*inch, row[0])
+            c.drawString(start_x + 0.2*inch, current_y - row_height + 0.12*inch, row[0])
             
-            # Color code the count values
             if i > 0:
                 if "IN" in row[0] and "Missed" not in row[0]:
-                    c.setFillColorRGB(0.2, 0.7, 0.3)  # Green for IN
+                    c.setFillColorRGB(0.2, 0.7, 0.3)
                 elif "OUT" in row[0] and "Missed" not in row[0]:
-                    c.setFillColorRGB(0.9, 0.3, 0.3)  # Red for OUT
-                elif "Missed IN" in row[0]:
-                    c.setFillColorRGB(0.95, 0.7, 0.1)  # Yellow for Missed IN
-                elif "Missed OUT" in row[0]:
-                    c.setFillColorRGB(1, 0.5, 0.1)  # Orange for Missed OUT
-                    
-                if i < len(data) - 2:  # Not total rows
-                    c.setFont("Helvetica-Bold", 14)
+                    c.setFillColorRGB(0.9, 0.3, 0.3)
+                c.setFont("Helvetica-Bold", 12)
                 
-            c.drawString(start_x + col_width + 0.2*inch, current_y - row_height + 0.15*inch, row[1])
-            
+            c.drawString(start_x + col_width + 0.2*inch, current_y - row_height + 0.12*inch, row[1])
             current_y -= row_height
         
-        # Statistics Summary Box
-        summary_y = current_y - 0.8*inch
-        c.setFillColorRGB(0.95, 0.95, 1)
-        c.rect(1*inch, summary_y, width - 2*inch, 0.6*inch, fill=True, stroke=True)
+        # ============ INDIVIDUAL SESSIONS ============
+        current_y -= 0.6*inch
         
+        if current_y < 3*inch:  # Start new page if needed
+            c.showPage()
+            current_y = height - 1*inch
+        
+        c.setFont("Helvetica-Bold", 14)
         c.setFillColorRGB(0.2, 0.2, 0.2)
-        c.setFont("Helvetica-Bold", 11)
+        c.drawString(1*inch, current_y, "Individual Session Details")
         
-        total_detected = self.in_count + self.out_count + self.missed_in + self.missed_out
-        accuracy = ((self.in_count + self.out_count) / total_detected * 100) if total_detected > 0 else 100
+        current_y -= 0.3*inch
         
-        c.drawString(1.3*inch, summary_y + 0.35*inch, f"Total Objects Detected: {total_detected}")
-        c.drawString(1.3*inch, summary_y + 0.1*inch, f"Counting Accuracy: {accuracy:.1f}%")
+        for idx, session in enumerate(self.session_history[-10:], 1):  # Show last 10 sessions
+            if current_y < 2*inch:  # New page if needed
+                c.showPage()
+                current_y = height - 1*inch
+            
+            # Session box
+            box_height = 1.2*inch
+            c.setFillColorRGB(0.98, 0.98, 1)
+            c.rect(1*inch, current_y - box_height, width - 2*inch, box_height, fill=True, stroke=True)
+            
+            c.setFillColorRGB(0.2, 0.2, 0.2)
+            c.setFont("Helvetica-Bold", 11)
+            c.drawString(1.2*inch, current_y - 0.25*inch, f"Session {len(self.session_history) - 10 + idx}")
+            
+            c.setFont("Helvetica", 9)
+            c.drawString(1.2*inch, current_y - 0.45*inch, f"Start: {session['start']}")
+            c.drawString(1.2*inch, current_y - 0.65*inch, f"End:   {session['end']}")
+            
+            c.setFont("Helvetica-Bold", 10)
+            c.setFillColorRGB(0.2, 0.7, 0.3)
+            c.drawString(1.2*inch, current_y - 0.9*inch, f"IN: {session['in_count']}")
+            
+            c.setFillColorRGB(0.9, 0.3, 0.3)
+            c.drawString(2.2*inch, current_y - 0.9*inch, f"OUT: {session['out_count']}")
+            
+            c.setFillColorRGB(0.6, 0.6, 0.6)
+            c.drawString(3.3*inch, current_y - 0.9*inch, f"Missed IN: {session['missed_in']}")
+            c.drawString(4.8*inch, current_y - 0.9*inch, f"Missed OUT: {session['missed_out']}")
+            
+            current_y -= (box_height + 0.2*inch)
         
         # Footer
         c.setFont("Helvetica-Oblique", 9)
@@ -190,8 +225,8 @@ class ObjectCounter:
         c.drawCentredString(width/2, 0.5*inch, "Generated by Object Counter System | Powered by YOLO")
         
         c.save()
-        print(f"✓ Professional report saved: {filename}")
-        return filename
+        print(f"✓ Report saved to: {self.pdf_file} (Contains {len(self.session_history)} sessions)")
+        return self.pdf_file
 
     # ---------------- Mouse ----------------
     def mouse_event(self, event, x, y, flags, param):
@@ -307,12 +342,10 @@ class ObjectCounter:
                 if tid not in visible_ids and (self.frame_count - info["last_seen"] > self.max_missing_frames):
 
                     if not info["counted"]:
-                        # Check if object crossed the line but wasn't counted
                         if tid in self.hist:
                             first_side = info["first_side"]
                             last_side = info["last_side"]
                             
-                            # Check if sides changed (crossed the line)
                             if first_side * last_side < 0:
                                 if last_side > 0:
                                     self.missed_in += 1
@@ -331,6 +364,9 @@ class ObjectCounter:
 
             cvzone.putTextRect(frame,f"MISSED IN: {self.missed_in}",(50,130),2,2,colorR=(255,255,0))
             cvzone.putTextRect(frame,f"MISSED OUT: {self.missed_out}",(50,180),2,2,colorR=(255,50,50))
+            
+            # Show total sessions
+            cvzone.putTextRect(frame,f"Sessions: {len(self.session_history)}",(50,230),1,1,colorR=(100,100,255))
 
             if self.show:
                 cv2.imshow("ObjectCounter", frame)
@@ -346,12 +382,14 @@ class ObjectCounter:
                     os.remove(self.json_file)
 
             elif key == ord('o'):
-                print("SAVING DATA TO PDF & RESETTING COUNTERS...")
+                print("SAVING SESSION TO PDF & RESETTING COUNTERS...")
                 self.save_to_pdf()
                 self.in_count = 0
                 self.out_count = 0
-                self.session_start_time = datetime.now()  # Reset session time
-                print("IN & OUT COUNTERS RESET - NEW SESSION STARTED")
+                self.missed_in = 0
+                self.missed_out = 0
+                self.session_start_time = datetime.now()
+                print("COUNTERS RESET - NEW SESSION STARTED")
 
             elif key == 27:
                 break
