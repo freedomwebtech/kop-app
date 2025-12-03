@@ -9,6 +9,8 @@ from datetime import datetime
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import inch
+from reportlab.lib import colors
+from reportlab.platypus import Table, TableStyle
 
 class ObjectCounter:
     def __init__(self, source, model="yolo12n.pt", classes_to_count=[0], show=True, json_file="line_coords.json"):
@@ -58,32 +60,108 @@ class ObjectCounter:
         c = canvas.Canvas(filename, pagesize=letter)
         width, height = letter
         
+        # Header Background
+        c.setFillColorRGB(0.2, 0.4, 0.7)  # Blue header
+        c.rect(0, height - 1.8*inch, width, 1.8*inch, fill=True, stroke=False)
+        
         # Title
-        c.setFont("Helvetica-Bold", 20)
-        c.drawString(1*inch, height - 1*inch, "Object Counter Report")
+        c.setFillColorRGB(1, 1, 1)  # White text
+        c.setFont("Helvetica-Bold", 28)
+        c.drawCentredString(width/2, height - 1*inch, "OBJECT COUNTER REPORT")
         
-        # Date and Time
+        # Subtitle line
         c.setFont("Helvetica", 12)
-        date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        c.drawString(1*inch, height - 1.5*inch, f"Date & Time: {date_str}")
+        c.drawCentredString(width/2, height - 1.4*inch, "Automated Traffic Monitoring System")
         
-        # Counts
+        # Date and Time Box
+        date_str = datetime.now().strftime("%B %d, %Y")
+        time_str = datetime.now().strftime("%I:%M:%S %p")
+        
+        c.setFont("Helvetica-Bold", 11)
+        c.drawString(1*inch, height - 2.5*inch, "Report Generated:")
+        c.setFont("Helvetica", 11)
+        c.drawString(1*inch, height - 2.8*inch, f"Date: {date_str}")
+        c.drawString(1*inch, height - 3.1*inch, f"Time: {time_str}")
+        
+        # Main Data Section - Create Table
+        y_position = height - 4.2*inch
+        
+        c.setFont("Helvetica-Bold", 16)
+        c.setFillColorRGB(0.2, 0.2, 0.2)
+        c.drawString(1*inch, y_position, "Traffic Count Summary")
+        
+        # Data boxes with colors
+        box_y = y_position - 0.6*inch
+        box_width = 2.5*inch
+        box_height = 0.8*inch
+        spacing = 0.3*inch
+        
+        # IN Count Box (Green)
+        c.setFillColorRGB(0.2, 0.7, 0.3)
+        c.rect(1*inch, box_y, box_width, box_height, fill=True, stroke=False)
+        c.setFillColorRGB(1, 1, 1)
         c.setFont("Helvetica-Bold", 14)
-        c.drawString(1*inch, height - 2.2*inch, "Count Summary:")
+        c.drawString(1.2*inch, box_y + 0.5*inch, "IN COUNT")
+        c.setFont("Helvetica-Bold", 24)
+        c.drawString(1.2*inch, box_y + 0.15*inch, str(self.in_count))
         
-        c.setFont("Helvetica", 12)
-        c.drawString(1.5*inch, height - 2.6*inch, f"IN Count: {self.in_count}")
-        c.drawString(1.5*inch, height - 3.0*inch, f"OUT Count: {self.out_count}")
-        c.drawString(1.5*inch, height - 3.4*inch, f"Missed IN: {self.missed_in}")
-        c.drawString(1.5*inch, height - 3.8*inch, f"Missed OUT: {self.missed_out}")
+        # OUT Count Box (Red)
+        c.setFillColorRGB(0.9, 0.3, 0.3)
+        c.rect(1*inch + box_width + spacing, box_y, box_width, box_height, fill=True, stroke=False)
+        c.setFillColorRGB(1, 1, 1)
+        c.setFont("Helvetica-Bold", 14)
+        c.drawString(1.2*inch + box_width + spacing, box_y + 0.5*inch, "OUT COUNT")
+        c.setFont("Helvetica-Bold", 24)
+        c.drawString(1.2*inch + box_width + spacing, box_y + 0.15*inch, str(self.out_count))
         
-        # Total
+        # Missed counts boxes
+        box_y2 = box_y - box_height - spacing
+        
+        # Missed IN Box (Yellow)
+        c.setFillColorRGB(0.95, 0.8, 0.2)
+        c.rect(1*inch, box_y2, box_width, box_height, fill=True, stroke=False)
+        c.setFillColorRGB(0.2, 0.2, 0.2)
+        c.setFont("Helvetica-Bold", 14)
+        c.drawString(1.2*inch, box_y2 + 0.5*inch, "MISSED IN")
+        c.setFont("Helvetica-Bold", 24)
+        c.drawString(1.2*inch, box_y2 + 0.15*inch, str(self.missed_in))
+        
+        # Missed OUT Box (Orange)
+        c.setFillColorRGB(1, 0.6, 0.2)
+        c.rect(1*inch + box_width + spacing, box_y2, box_width, box_height, fill=True, stroke=False)
+        c.setFillColorRGB(1, 1, 1)
+        c.setFont("Helvetica-Bold", 14)
+        c.drawString(1.2*inch + box_width + spacing, box_y2 + 0.5*inch, "MISSED OUT")
+        c.setFont("Helvetica-Bold", 24)
+        c.drawString(1.2*inch + box_width + spacing, box_y2 + 0.15*inch, str(self.missed_out))
+        
+        # Total Summary Box
         total = self.in_count + self.out_count
-        c.setFont("Helvetica-Bold", 12)
-        c.drawString(1.5*inch, height - 4.4*inch, f"Total Counted: {total}")
+        net = self.in_count - self.out_count
+        
+        summary_y = box_y2 - 1.5*inch
+        c.setFillColorRGB(0.95, 0.95, 0.95)
+        c.rect(1*inch, summary_y, width - 2*inch, 1*inch, fill=True, stroke=True)
+        
+        c.setFillColorRGB(0.2, 0.2, 0.2)
+        c.setFont("Helvetica-Bold", 14)
+        c.drawString(1.3*inch, summary_y + 0.7*inch, "TOTAL TRAFFIC:")
+        c.setFont("Helvetica-Bold", 20)
+        c.drawString(3.5*inch, summary_y + 0.65*inch, str(total))
+        
+        c.setFont("Helvetica-Bold", 14)
+        c.drawString(1.3*inch, summary_y + 0.3*inch, "NET FLOW:")
+        c.setFont("Helvetica-Bold", 20)
+        net_text = f"+{net}" if net > 0 else str(net)
+        c.drawString(3.5*inch, summary_y + 0.25*inch, net_text)
+        
+        # Footer
+        c.setFont("Helvetica-Oblique", 9)
+        c.setFillColorRGB(0.5, 0.5, 0.5)
+        c.drawCentredString(width/2, 0.5*inch, "Generated by Object Counter System | Powered by YOLO")
         
         c.save()
-        print(f"Report saved: {filename}")
+        print(f"✓ Professional report saved: {filename}")
         return filename
 
     # ---------------- Mouse ----------------
@@ -200,19 +278,21 @@ class ObjectCounter:
                 if tid not in visible_ids and (self.frame_count - info["last_seen"] > self.max_missing_frames):
 
                     if not info["counted"]:
-                        start = info["first_side"]
-                        end = info["last_side"]
-
-                        if start < 0 and end < 0:
-                            self.missed_out += 1
-                            missed = "MISSED OUT"
-                        elif start > 0 and end > 0:
-                            self.missed_in += 1
-                            missed = "MISSED IN"
-                        else:
-                            missed = "UNKNOWN"
-
-                        print(f"[MISS] {tid} -> {missed}")
+                        # Check if object crossed the line but wasn't counted
+                        if tid in self.hist:
+                            first_side = info["first_side"]
+                            last_side = info["last_side"]
+                            
+                            # Check if sides changed (crossed the line)
+                            if first_side * last_side < 0:
+                                if last_side > 0:
+                                    self.missed_in += 1
+                                    missed = "MISSED IN"
+                                else:
+                                    self.missed_out += 1
+                                    missed = "MISSED OUT"
+                                
+                                print(f"[MISS] {tid} -> {missed}")
 
                     del self.track_info[tid]
 
