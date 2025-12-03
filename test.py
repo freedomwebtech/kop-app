@@ -248,8 +248,19 @@ class ObjectCounter:
     def side(self, px, py, x1, y1, x2, y2):
         return (x2 - x1)*(py - y1) - (y2 - y1)*(px - x1)
 
+    def distance_to_line(self, point, p1, p2):
+        """Calculate perpendicular distance from point to line"""
+        x0, y0 = point
+        x1, y1 = p1
+        x2, y2 = p2
+        num = abs((y2-y1)*x0 - (x2-x1)*y0 + x2*y1 - y2*x1)
+        den = ((y2-y1)**2 + (x2-x1)**2)**0.5
+        return num / den if den > 0 else float('inf')
+
     def run(self):
         print("Starting Object Counter...")
+        active_ids = set()
+        
         while True:
             if self.is_rtsp:
                 frame = self.cap.read()
@@ -288,32 +299,29 @@ class ObjectCounter:
 
                     curr_side = self.side(cx, cy, *self.line_p1, *self.line_p2)
 
-                    # ===== FIX 1: Better initialization =====
+                    # Initialize tracking info
                     if track_id not in self.track_info:
                         self.track_info[track_id] = {
                             "first_side": curr_side,
                             "last_side": curr_side,
                             "last_seen": self.frame_count,
                             "counted": False,
-                            "crossed_line": False,  # NEW: Track if actually crossed
-                            "side_history": [curr_side]  # NEW: Track side changes
+                            "touched_line": False,
+                            "first_seen": self.frame_count
                         }
                     
-                    # ===== FIX 2: Update side history =====
-                    self.track_info[track_id]["side_history"].append(curr_side)
-                    
-                    # Keep only recent history (last 10 frames)
-                    if len(self.track_info[track_id]["side_history"]) > 10:
-                        self.track_info[track_id]["side_history"].pop(0)
+                    # Check if near line (within 30 pixels)
+                    dist = self.distance_to_line((cx, cy), self.line_p1, self.line_p2)
+                    if dist < 30:
+                        self.track_info[track_id]["touched_line"] = True
 
-                    # ===== FIX 3: Crossing detection with previous position =====
+                    # Crossing detection with previous position
                     if track_id in self.hist:
                         prev_cx, prev_cy = self.hist[track_id]
                         prev_side = self.side(prev_cx, prev_cy, *self.line_p1, *self.line_p2)
 
                         # Check if crossed the line (signs differ)
                         if prev_side * curr_side < 0 and not self.track_info[track_id]["counted"]:
-                            self.track_info[track_id]["crossed_line"] = True
                             
                             if curr_side > 0:
                                 self.in_count += 1
@@ -323,6 +331,7 @@ class ObjectCounter:
                                 direction = "OUT"
 
                             self.track_info[track_id]["counted"] = True
+                            self.track_info[track_id]["direction"] = direction
                             self.counted.add(track_id)
                             print(f"[COUNT] ID:{track_id} -> {direction}")
 
@@ -338,58 +347,51 @@ class ObjectCounter:
                     status = "COUNTED" if self.track_info[track_id]["counted"] else "ACTIVE"
                     cvzone.putTextRect(frame, f"ID:{track_id} {status}", (x1,y1), 1, 1)
 
-            # ===== FIX 4: IMPROVED MISSED DETECTION =====
-            for tid in list(self.track_info.keys()):
-                info = self.track_info[tid]
-
-                # Check if object disappeared
-                if tid not in visible_ids and (self.frame_count - info["last_seen"] > self.max_missing_frames):
-
-                    # If not counted yet, check if it likely crossed
-                    if not info["counted"] and tid in self.hist:
+            # IMPROVED MISSED DETECTION (from misscountdisplay4.py)
+            disappeared = active_ids - visible_ids
+            
+            for tid in disappeared:
+                if tid in self.track_info:
+                    info = self.track_info[tid]
+                    
+                    # Check if object disappeared and not counted yet
+                    if (tid not in self.counted and 
+                        info.get("touched_line", False) and 
+                        tid in self.hist):
                         
-                        # Method 1: Check side history for crossing pattern
-                        side_history = info.get("side_history", [])
+                        # Determine direction based on last position
+                        last_pos = self.hist[tid]
+                        last_side = self.side(last_pos[0], last_pos[1], *self.line_p1, *self.line_p2)
                         
-                        # Check if there was a sign change in side history
-                        crossed_in_history = False
-                        if len(side_history) >= 2:
-                            for i in range(len(side_history) - 1):
-                                if side_history[i] * side_history[i+1] < 0:
-                                    crossed_in_history = True
-                                    break
+                        # Count as missed based on which side they were on
+                        if last_side > 0:
+                            self.missed_in += 1
+                            self.in_count += 1
+                            missed_type = "MISSED IN"
+                        else:
+                            self.missed_out += 1
+                            self.out_count += 1
+                            missed_type = "MISSED OUT"
                         
-                        # Method 2: Compare first and last positions
-                        first_side = info["first_side"]
-                        last_side = info["last_side"]
+                        # Add to display
+                        self.missed_track_ids.append({
+                            "id": tid,
+                            "type": missed_type,
+                            "frame": self.frame_count
+                        })
                         
-                        # If crossed (either in history OR different first/last sides)
-                        if crossed_in_history or (first_side * last_side < 0):
-                            
-                            # Determine direction based on last known side
-                            if last_side > 0:
-                                self.missed_in += 1
-                                missed_type = "MISSED IN"
-                            else:
-                                self.missed_out += 1
-                                missed_type = "MISSED OUT"
-                            
-                            # Add to display
-                            self.missed_track_ids.append({
-                                "id": tid,
-                                "type": missed_type,
-                                "frame": self.frame_count
-                            })
-                            
-                            if len(self.missed_track_ids) > self.max_missed_display:
-                                self.missed_track_ids.pop(0)
-                            
-                            print(f"[MISS] ID:{tid} -> {missed_type} (first:{first_side:.1f}, last:{last_side:.1f})")
-
+                        if len(self.missed_track_ids) > self.max_missed_display:
+                            self.missed_track_ids.pop(0)
+                        
+                        print(f"[MISS] ID:{tid} -> {missed_type}")
+                    
                     # Remove track
                     del self.track_info[tid]
                     if tid in self.hist:
                         del self.hist[tid]
+
+            # Update active IDs for next frame
+            active_ids = visible_ids.copy()
 
             # -------- DISPLAY --------
             cvzone.putTextRect(frame,f"IN: {self.in_count}",(50,30),2,2,colorR=(0,255,0))
