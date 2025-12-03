@@ -19,7 +19,7 @@ class ObjectCounter:
         self.names = self.model.names
         self.classes = classes_to_count
         self.show = show
-        self.pdf_file = pdf_file  # Fixed PDF filename
+        self.pdf_file = pdf_file
 
         # ---- RTSP ----
         if isinstance(source, str) and source.startswith("rtsp://"):
@@ -39,14 +39,18 @@ class ObjectCounter:
         self.out_count = 0
         self.missed_in = 0
         self.missed_out = 0
+        
+        # ---- NEW: Track missed IDs for display ----
+        self.missed_track_ids = []  # Store recently missed track IDs
+        self.max_missed_display = 10  # Maximum number of missed IDs to show
 
         self.max_missing_frames = 30
         self.frame_count = 0
         
         # ---- Session tracking ----
         self.session_start_time = datetime.now()
-        self.session_history = []  # Store all sessions
-        self.current_session_saved = False  # Track if current session is saved
+        self.session_history = []
+        self.current_session_saved = False
         self.load_session_history()
 
         # ---- line storage ----
@@ -82,9 +86,7 @@ class ObjectCounter:
     def save_to_pdf(self):
         """Save all sessions to a single PDF file (overwrites)"""
         
-        # Only save if user explicitly pressed 'o'
         if not self.current_session_saved:
-            # Add current session to history
             current_session = {
                 "start": self.session_start_time.strftime("%Y-%m-%d %H:%M:%S"),
                 "end": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -97,7 +99,6 @@ class ObjectCounter:
             self.save_session_history()
             self.current_session_saved = True
         
-        # Create PDF
         c = canvas.Canvas(self.pdf_file, pagesize=letter)
         width, height = letter
         
@@ -110,11 +111,9 @@ class ObjectCounter:
         c.setFont("Helvetica-Bold", 28)
         c.drawCentredString(width/2, height - 1*inch, "OBJECT COUNTER REPORT")
         
-        # Subtitle
         c.setFont("Helvetica", 12)
         c.drawCentredString(width/2, height - 1.4*inch, "Automated Traffic Monitoring System")
         
-        # Report generation time
         c.setFont("Helvetica-Bold", 10)
         c.drawCentredString(width/2, height - 1.8*inch, f"Report Generated: {datetime.now().strftime('%B %d, %Y - %I:%M:%S %p')}")
         
@@ -127,13 +126,11 @@ class ObjectCounter:
         
         y_position -= 0.4*inch
         
-        # Calculate totals
         total_in = sum(s["in_count"] for s in self.session_history)
         total_out = sum(s["out_count"] for s in self.session_history)
         total_missed_in = sum(s["missed_in"] for s in self.session_history)
         total_missed_out = sum(s["missed_out"] for s in self.session_history)
         
-        # Grand totals table
         col_width = (width - 2*inch) / 2
         row_height = 0.4*inch
         
@@ -151,7 +148,7 @@ class ObjectCounter:
         current_y = y_position
         
         for i, row in enumerate(grand_data):
-            if i == 0:  # Header
+            if i == 0:
                 c.setFillColorRGB(0.2, 0.4, 0.7)
                 c.rect(start_x, current_y - row_height, col_width * 2, row_height, fill=True, stroke=False)
                 c.setFillColorRGB(1, 1, 1)
@@ -182,7 +179,7 @@ class ObjectCounter:
         # ============ INDIVIDUAL SESSIONS ============
         current_y -= 0.6*inch
         
-        if current_y < 3*inch:  # Start new page if needed
+        if current_y < 3*inch:
             c.showPage()
             current_y = height - 1*inch
         
@@ -192,12 +189,11 @@ class ObjectCounter:
         
         current_y -= 0.3*inch
         
-        for idx, session in enumerate(self.session_history[-10:], 1):  # Show last 10 sessions
-            if current_y < 2*inch:  # New page if needed
+        for idx, session in enumerate(self.session_history[-10:], 1):
+            if current_y < 2*inch:
                 c.showPage()
                 current_y = height - 1*inch
             
-            # Session box
             box_height = 1.2*inch
             c.setFillColorRGB(0.98, 0.98, 1)
             c.rect(1*inch, current_y - box_height, width - 2*inch, box_height, fill=True, stroke=True)
@@ -358,6 +354,17 @@ class ObjectCounter:
                                     self.missed_out += 1
                                     missed = "MISSED OUT"
                                 
+                                # ---- NEW: Add to missed display list ----
+                                self.missed_track_ids.append({
+                                    "id": tid,
+                                    "type": missed,
+                                    "frame": self.frame_count
+                                })
+                                
+                                # Keep only recent missed IDs
+                                if len(self.missed_track_ids) > self.max_missed_display:
+                                    self.missed_track_ids.pop(0)
+                                
                                 print(f"[MISS] {tid} -> {missed}")
 
                     del self.track_info[tid]
@@ -369,8 +376,26 @@ class ObjectCounter:
             cvzone.putTextRect(frame,f"MISSED IN: {self.missed_in}",(50,130),2,2,colorR=(255,255,0))
             cvzone.putTextRect(frame,f"MISSED OUT: {self.missed_out}",(50,180),2,2,colorR=(255,50,50))
             
-            # Show total sessions
             cvzone.putTextRect(frame,f"Sessions: {len(self.session_history)}",(50,230),1,1,colorR=(100,100,255))
+            
+            # -------- NEW: DISPLAY MISSED TRACK IDs PANEL --------
+            if self.missed_track_ids:
+                panel_y = 280
+                cvzone.putTextRect(frame, "MISSED TRACKS:", (50, panel_y), 1, 2, colorR=(255,165,0))
+                
+                panel_y += 40
+                for missed_info in self.missed_track_ids[-5:]:  # Show last 5
+                    tid = missed_info["id"]
+                    miss_type = missed_info["type"]
+                    
+                    # Color based on type
+                    if "IN" in miss_type:
+                        color = (0, 255, 255)  # Yellow
+                    else:
+                        color = (50, 50, 255)  # Red
+                    
+                    cvzone.putTextRect(frame, f"ID:{tid} - {miss_type}", (50, panel_y), 1, 1, colorR=color)
+                    panel_y += 25
 
             if self.show:
                 cv2.imshow("ObjectCounter", frame)
@@ -392,8 +417,9 @@ class ObjectCounter:
                 self.out_count = 0
                 self.missed_in = 0
                 self.missed_out = 0
+                self.missed_track_ids = []  # Clear missed track display
                 self.session_start_time = datetime.now()
-                self.current_session_saved = False  # Reset for new session
+                self.current_session_saved = False
                 print("COUNTERS RESET - NEW SESSION STARTED")
 
             elif key == 27:
