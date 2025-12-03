@@ -5,6 +5,10 @@ import json
 import os
 from imutils.video import VideoStream
 import time
+from datetime import datetime
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+from reportlab.lib.units import inch
 
 class ObjectCounter:
     def __init__(self, source, model="yolo12n.pt", classes_to_count=[0], show=True, json_file="line_coords.json"):
@@ -45,6 +49,42 @@ class ObjectCounter:
 
         cv2.namedWindow("ObjectCounter")
         cv2.setMouseCallback("ObjectCounter", self.mouse_event)
+
+    # ---------------- Save to PDF ----------------
+    def save_to_pdf(self):
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"count_report_{timestamp}.pdf"
+        
+        c = canvas.Canvas(filename, pagesize=letter)
+        width, height = letter
+        
+        # Title
+        c.setFont("Helvetica-Bold", 20)
+        c.drawString(1*inch, height - 1*inch, "Object Counter Report")
+        
+        # Date and Time
+        c.setFont("Helvetica", 12)
+        date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        c.drawString(1*inch, height - 1.5*inch, f"Date & Time: {date_str}")
+        
+        # Counts
+        c.setFont("Helvetica-Bold", 14)
+        c.drawString(1*inch, height - 2.2*inch, "Count Summary:")
+        
+        c.setFont("Helvetica", 12)
+        c.drawString(1.5*inch, height - 2.6*inch, f"IN Count: {self.in_count}")
+        c.drawString(1.5*inch, height - 3.0*inch, f"OUT Count: {self.out_count}")
+        c.drawString(1.5*inch, height - 3.4*inch, f"Missed IN: {self.missed_in}")
+        c.drawString(1.5*inch, height - 3.8*inch, f"Missed OUT: {self.missed_out}")
+        
+        # Total
+        total = self.in_count + self.out_count
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(1.5*inch, height - 4.4*inch, f"Total Counted: {total}")
+        
+        c.save()
+        print(f"Report saved: {filename}")
+        return filename
 
     # ---------------- Mouse ----------------
     def mouse_event(self, event, x, y, flags, param):
@@ -197,9 +237,11 @@ class ObjectCounter:
                     os.remove(self.json_file)
 
             elif key == ord('o'):
-                print("RESET IN & OUT COUNTERS")
+                print("SAVING DATA TO PDF & RESETTING COUNTERS...")
+                self.save_to_pdf()
                 self.in_count = 0
                 self.out_count = 0
+                print("IN & OUT COUNTERS RESET")
 
             elif key == 27:
                 break
