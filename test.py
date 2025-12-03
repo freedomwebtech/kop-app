@@ -33,9 +33,9 @@ def detect_box_color(frame, box):
     white_intensity = white_mask.mean()
 
     if brown_intensity > 20:
-        return "Brown Box"
+        return "Brown"
     elif white_intensity > 20:
-        return "White Box"
+        return "White"
 
     return "Unknown"
 
@@ -77,9 +77,6 @@ class ObjectCounter:
         self.color_in_count = {}
         self.color_out_count = {}
 
-        self.missed_in = set()
-        self.missed_out = set()
-        self.missed_cross = set()
         self.max_missing_frames = 40
 
         # -------- Line --------
@@ -119,31 +116,6 @@ class ObjectCounter:
     def side(self, px, py, x1, y1, x2, y2):
         return (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
 
-    # ---------------- Lost Track Handler ----------------
-    def check_lost_ids(self):
-        current = self.frame_count
-        lost = []
-
-        for tid, last in self.last_seen.items():
-            if current - last > self.max_missing_frames:
-                lost.append(tid)
-
-        for tid in lost:
-            if tid in self.crossed_ids and tid not in self.counted:
-                self.missed_cross.add(tid)
-
-            elif tid not in self.counted and tid in self.hist:
-                cx, cy = self.hist[tid]
-                s = self.side(cx, cy, *self.line_p1, *self.line_p2)
-
-                if s > 0:
-                    self.missed_in.add(tid)
-                else:
-                    self.missed_out.add(tid)
-
-            self.hist.pop(tid, None)
-            self.last_seen.pop(tid, None)
-
     # ---------------- Main Loop ----------------
     def run(self):
         print("RUNNING... Press R to Reset | ESC to Exit")
@@ -182,9 +154,6 @@ class ObjectCounter:
                     cx = int((x1 + x2) / 2)
                     cy = int((y1 + y2) / 2)
 
-                    self.last_seen[tid] = self.frame_count
-
-                    # ✅ COLOR DETECTION
                     color_name = detect_box_color(frame, box)
 
                     if tid in self.hist:
@@ -193,55 +162,51 @@ class ObjectCounter:
                         s2 = self.side(cx, cy, *self.line_p1, *self.line_p2)
 
                         if s1 * s2 < 0:
-                            self.crossed_ids.add(tid)
-
                             if tid not in self.counted:
                                 if s2 > 0:
                                     self.in_count += 1
-                                    self.color_in_count[color_name] = \
-                                        self.color_in_count.get(color_name, 0) + 1
+                                    self.color_in_count[color_name] = self.color_in_count.get(color_name, 0) + 1
                                 else:
                                     self.out_count += 1
-                                    self.color_out_count[color_name] = \
-                                        self.color_out_count.get(color_name, 0) + 1
-
+                                    self.color_out_count[color_name] = self.color_out_count.get(color_name, 0) + 1
                                 self.counted.add(tid)
 
                     self.hist[tid] = (cx, cy)
 
-                    # -------- Draw Box + Color Label --------
+                    # -------- Draw Box + Label --------
                     cv2.rectangle(frame, (x1, y1),
                                   (x2, y2), (0, 255, 0), 2)
-                    cv2.circle(frame, (cx, cy),
-                               4, (0, 0, 255), -1)
 
                     cv2.putText(frame, color_name, (x1, y1 - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX,
                                 0.6, (255, 200, 0), 2)
 
-            if self.line_p1:
-                self.check_lost_ids()
+            # ---------------- TRANSPARENT TOP DISPLAY PANEL ----------------
 
-            # ---------------- DISPLAY ----------------
+            overlay = frame.copy()
+            panel_height = 80
+            cv2.rectangle(overlay, (0, 0), (1020, panel_height), (0, 0, 0), -1)
+            frame = cv2.addWeighted(overlay, 0.5, frame, 0.5, 0)
 
-            cvzone.putTextRect(frame, f"IN: {self.in_count}",
-                               (30, 30), 2, 2, colorR=(0, 255, 0))
-            cvzone.putTextRect(frame, f"OUT: {self.out_count}",
-                               (30, 80), 2, 2, colorR=(0, 0, 255))
+            cv2.putText(frame, f"TOTAL IN: {self.in_count}", (20, 35),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 
-            y_offset = 140
+            cv2.putText(frame, f"TOTAL OUT: {self.out_count}", (240, 35),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+
+            x_offset = 520
             for color, cnt in self.color_in_count.items():
-                cvzone.putTextRect(frame, f"IN {color}: {cnt}",
-                                   (30, 100), 2, 2,
-                                   colorR=(255, 165, 0))
-                y_offset += 50
+                cv2.putText(frame, f"IN {color}: {cnt}", (x_offset, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 165, 0), 2)
+                x_offset += 160
 
-            y_offset = 140
+            x_offset = 520
             for color, cnt in self.color_out_count.items():
-                cvzone.putTextRect(frame, f"OUT {color}: {cnt}",
-                                   (30, 120), 2, 2,
-                                   colorR=(200, 0, 200))
-                y_offset += 50
+                cv2.putText(frame, f"OUT {color}: {cnt}", (x_offset, 60),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 0, 200), 2)
+                x_offset += 160
+
+            # ---------------- SHOW FRAME ----------------
 
             if self.show:
                 cv2.imshow("ObjectCounter", frame)
@@ -254,9 +219,6 @@ class ObjectCounter:
                     self.counted.clear()
                     self.color_in_count.clear()
                     self.color_out_count.clear()
-                    self.missed_in.clear()
-                    self.missed_out.clear()
-                    self.missed_cross.clear()
                     self.in_count = 0
                     self.out_count = 0
                     print("✅ RESET DONE")
