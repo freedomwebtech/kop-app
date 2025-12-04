@@ -203,17 +203,17 @@ class ObjectCounter:
 
             elif tid not in self.counted and tid in self.hist:
                 cx, cy = self.hist[tid]
-                s = self.side(cx, cy, *self.line_p1, *self.line_p2)
+                s = self.side(cx, cy, *self.line_p2, *self.line_p1)
 
                 # ✅ FIXED: Based on crossing direction logic
                 # s2 > 0 means object moved TO positive side = IN direction
                 # s2 < 0 means object moved TO negative side = OUT direction
                 if s < 0:
                     # Negative side = before crossing IN, so missed IN
-                    self.missed_out.add(tid)
+                    self.missed_in.add(tid)
                 else:
                     # Positive side = after crossing IN, so missed OUT
-                    self.missed_in.add(tid)
+                    self.missed_out.add(tid)
 
             self.hist.pop(tid, None)
             self.last_seen.pop(tid, None)
