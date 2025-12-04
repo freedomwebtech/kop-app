@@ -405,72 +405,90 @@ class ObjectCounter:
             if self.line_p1:
                 self.check_lost_ids()
 
-            # ================= BEAUTIFUL TRANSPARENT DISPLAY =================
+            # ================= ENHANCED DISPLAY WITH COLOR SEPARATION =================
 
-            # Transparent dark overlay for readability
+            # Main overlay panel (increased height for better spacing)
             overlay = frame.copy()
-            cv2.rectangle(overlay, (0, 0), (1020, 80), (0, 0, 0), -1)
-            frame = cv2.addWeighted(overlay, 0.25, frame, 0.75, 0)
+            cv2.rectangle(overlay, (0, 0), (1020, 140), (0, 0, 0), -1)
+            frame = cv2.addWeighted(overlay, 0.3, frame, 0.7, 0)
 
             # --------- TITLE BAR ---------
-            cv2.putText(frame, "TRACKING SYSTEM", (15, 25),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (100, 200, 255), 2)
-            cv2.circle(frame, (210, 18), 5, (0, 255, 0), -1)
+            cv2.putText(frame, "TRACKING SYSTEM", (15, 28),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (100, 200, 255), 2)
+            cv2.circle(frame, (230, 21), 6, (0, 255, 0), -1)
 
-            # --------- MAIN COUNTERS ROW ---------
-            y_pos = 55
-            x_start = 15
-            gap = 95
-            font_size = 0.55
+            # --------- TOTAL COUNTS (First Row) ---------
+            y_row1 = 60
+            font_scale = 0.65
+            thickness = 2
             
-            # TOTAL IN
-            cv2.putText(frame, "IN:", (x_start, y_pos),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_size, (0, 255, 150), 2)
-            cv2.putText(frame, str(self.in_count), (x_start + 35, y_pos),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_size, (255, 255, 255), 2)
+            # Total IN
+            cv2.putText(frame, "TOTAL IN:", (15, y_row1),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 255, 150), thickness)
+            cv2.putText(frame, str(self.in_count), (150, y_row1),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), thickness)
 
-            # TOTAL OUT
-            x_out = x_start + gap
-            cv2.putText(frame, "OUT:", (x_out, y_pos),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_size, (100, 180, 255), 2)
-            cv2.putText(frame, str(self.out_count), (x_out + 50, y_pos),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_size, (255, 255, 255), 2)
+            # Total OUT
+            cv2.putText(frame, "TOTAL OUT:", (240, y_row1),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, (100, 180, 255), thickness)
+            cv2.putText(frame, str(self.out_count), (390, y_row1),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), thickness)
 
-            # MISSED IN
-            x_miss_in = x_out + gap + 10
-            cv2.putText(frame, "MISS IN:", (x_miss_in, y_pos),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_size, (100, 255, 255), 2)
-            cv2.putText(frame, str(len(self.missed_in)), (x_miss_in + 90, y_pos),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_size, (255, 255, 255), 2)
+            # Missed counts
+            cv2.putText(frame, "MISS IN:", (480, y_row1),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 255, 255), 1)
+            cv2.putText(frame, str(len(self.missed_in)), (575, y_row1),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
-            # MISSED OUT
-            x_miss_out = x_miss_in + gap + 25
-            cv2.putText(frame, "MISS OUT:", (x_miss_out, y_pos),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_size, (255, 100, 255), 2)
-            cv2.putText(frame, str(len(self.missed_out)), (x_miss_out + 105, y_pos),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_size, (255, 255, 255), 2)
+            cv2.putText(frame, "MISS OUT:", (620, y_row1),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 100, 255), 1)
+            cv2.putText(frame, str(len(self.missed_out)), (730, y_row1),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
-            # MISS CROSS
-            x_cross = x_miss_out + gap + 35
-            cv2.putText(frame, "CROSS:", (x_cross, y_pos),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_size, (100, 100, 255), 2)
-            cv2.putText(frame, str(len(self.missed_cross)), (x_cross + 80, y_pos),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_size, (255, 255, 255), 2)
+            cv2.putText(frame, "CROSS:", (780, y_row1),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 100, 255), 1)
+            cv2.putText(frame, str(len(self.missed_cross)), (860, y_row1),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
-            # --------- COLOR BREAKDOWN ---------
-            x_color_start = 15
-            y_color = 75
-            color_gap = 120
+            # --------- SEPARATOR LINE ---------
+            cv2.line(frame, (10, 75), (1010, 75), (80, 80, 80), 1)
+
+            # --------- BROWN BOX COUNTS (Second Row) ---------
+            y_row2 = 105
+            brown_in = self.color_in_count.get("Brown", 0)
+            brown_out = self.color_out_count.get("Brown", 0)
+
+            # Brown box icon/indicator
+            cv2.rectangle(frame, (15, y_row2 - 20), (40, y_row2 - 5), (19, 69, 139), -1)
             
-            for idx, (color, cnt) in enumerate(self.color_in_count.items()):
-                x_pos = x_color_start + (idx * color_gap)
-                cv2.putText(frame, f"{color} IN: {cnt}", (x_pos, y_color),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (150, 255, 150), 1)
+            cv2.putText(frame, "BROWN IN:", (50, y_row2),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, (100, 150, 255), thickness)
+            cv2.putText(frame, str(brown_in), (200, y_row2),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), thickness)
 
-            for idx, (color, cnt) in enumerate(self.color_out_count.items()):
-                x_pos = x_color_start + (idx * color_gap) + 250
-                cv2.putText(frame, f"{color} OUT: {cnt}", (x_pos, y_color),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 255), 1)
+            cv2.putText(frame, "BROWN OUT:", (290, y_row2),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, (100, 150, 255), thickness)
+            cv2.putText(frame, str(brown_out), (460, y_row2),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), thickness)
+
+            # --------- WHITE BOX COUNTS (Third Row) ---------
+            y_row3 = 130
+            white_in = self.color_in_count.get("White", 0)
+            white_out = self.color_out_count.get("White", 0)
+
+            # White box icon/indicator
+            cv2.rectangle(frame, (15, y_row3 - 20), (40, y_row3 - 5), (245, 245, 245), -1)
+            cv2.rectangle(frame, (15, y_row3 - 20), (40, y_row3 - 5), (100, 100, 100), 2)
+            
+            cv2.putText(frame, "WHITE IN:", (50, y_row3),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, (200, 255, 200), thickness)
+            cv2.putText(frame, str(white_in), (200, y_row3),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), thickness)
+
+            cv2.putText(frame, "WHITE OUT:", (290, y_row3),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, (200, 255, 200), thickness)
+            cv2.putText(frame, str(white_out), (460, y_row3),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), thickness)
 
             if self.show:
                 cv2.imshow("ObjectCounter", frame)
