@@ -144,9 +144,8 @@ class ObjectCounter:
             self.sessions_data.append(self.current_session_data.copy())
 
     def generate_pdf_report(self):
-        """Generate PDF report with all session data"""
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        pdf_filename = os.path.join(self.pdf_folder, f"tracking_report_{timestamp}.pdf")
+        """Generate PDF report with all session data - Single PDF file"""
+        pdf_filename = os.path.join(self.pdf_folder, "tracking_report.pdf")
         
         doc = SimpleDocTemplate(pdf_filename, pagesize=A4)
         elements = []
@@ -309,9 +308,14 @@ class ObjectCounter:
 
     # ---------------- Reset Function ----------------
     def reset_all_data(self):
-        """Reset all tracking data and start new session"""
+        """Reset all tracking data, generate PDF, and start new session"""
         # End current session before resetting
         self.end_current_session()
+        
+        # Generate PDF with all sessions
+        if self.sessions_data:
+            pdf_file = self.generate_pdf_report()
+            print(f"📄 PDF Updated: {pdf_file}")
         
         # Reset counters
         self.hist.clear()
@@ -328,11 +332,11 @@ class ObjectCounter:
         
         # Start new session
         self.start_new_session()
-        print("✅ RESET DONE - New session started")
+        print("✅ RESET DONE - New session started | PDF saved")
 
     # ---------------- Main Loop ----------------
     def run(self):
-        print("RUNNING... Press O to Reset & Save Session | P to Generate PDF | ESC to Exit")
+        print("RUNNING... Press O to Reset & Save PDF | ESC to Exit")
 
         while True:
             if self.is_rtsp:
@@ -475,17 +479,14 @@ class ObjectCounter:
                 if key == ord('o') or key == ord('O'):
                     self.reset_all_data()
 
-                elif key == ord('p') or key == ord('P'):
-                    self.end_current_session()
-                    pdf_file = self.generate_pdf_report()
-                    print(f"📄 PDF saved: {pdf_file}")
-
                 elif key == 27:
                     break
 
-        # Save final session before exit
+        # Save final session and generate PDF before exit
         self.end_current_session()
-        self.generate_pdf_report()
+        if self.sessions_data:
+            self.generate_pdf_report()
+            print("📄 Final PDF generated on exit")
 
         if self.is_rtsp:
             self.cap.stop()
