@@ -191,7 +191,7 @@ class ObjectCounter:
                     
                     current_positions.append((cx, cy))
                     
-                    # Draw only center point (NO bounding box)
+                    # Draw only center point - NO BOUNDING BOX, NO ID
                     cv2.circle(frame, (cx, cy), 6, (0, 255, 255), -1)
                     cv2.circle(frame, (cx, cy), 8, (255, 255, 255), 2)
 
