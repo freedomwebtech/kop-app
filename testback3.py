@@ -41,18 +41,14 @@ class ObjectCounter:
         self.last_seen = {}
         self.crossed_ids = set()
         self.counted = set()
-        self.false_detections = set()  # NEW: Track IDs that didn't cross
+        self.false_detections = set()  # Track IDs that didn't cross
 
         # -------- Counters --------
         self.in_count = 0
         self.out_count = 0
-        self.cross_count = 0  # NEW: Count of objects that crossed
-        self.false_count = 0  # NEW: Count of false detections
+        self.false_count = 0  # Count of false detections
 
         # -------- MISSED LOGIC --------
-        self.missed_in = set()
-        self.missed_out = set()
-        self.missed_cross = set()
         self.max_missing_frames = 40
 
         # -------- Line --------
@@ -77,11 +73,7 @@ class ObjectCounter:
             'end_time': None,
             'in_count': 0,
             'out_count': 0,
-            'cross_count': 0,
-            'false_count': 0,
-            'missed_in': 0,
-            'missed_out': 0,
-            'missed_cross': 0
+            'false_count': 0
         }
 
     def end_current_session(self):
@@ -90,11 +82,7 @@ class ObjectCounter:
             self.current_session_data['end_time'] = datetime.now().strftime('%H:%M:%S')
             self.current_session_data['in_count'] = self.in_count
             self.current_session_data['out_count'] = self.out_count
-            self.current_session_data['cross_count'] = self.cross_count
             self.current_session_data['false_count'] = self.false_count
-            self.current_session_data['missed_in'] = len(self.missed_in)
-            self.current_session_data['missed_out'] = len(self.missed_out)
-            self.current_session_data['missed_cross'] = len(self.missed_cross)
 
     def print_session_summary(self):
         """Print session summary to console"""
@@ -107,11 +95,7 @@ class ObjectCounter:
         print(f"End Time:      {self.current_session_data['end_time']}")
         print(f"IN Count:      {self.current_session_data['in_count']}")
         print(f"OUT Count:     {self.current_session_data['out_count']}")
-        print(f"Cross Count:   {self.current_session_data['cross_count']}")
         print(f"False Count:   {self.current_session_data['false_count']}")
-        print(f"Missed IN:     {self.current_session_data['missed_in']}")
-        print(f"Missed OUT:    {self.current_session_data['missed_out']}")
-        print(f"Missed Cross:  {self.current_session_data['missed_cross']}")
         print("=" * 80 + "\n")
 
     # ---------------- Mouse ----------------
@@ -155,20 +139,6 @@ class ObjectCounter:
                 self.false_count += 1
                 print(f"❌ FALSE - ID:{tid} (detected but didn't cross)")
 
-            # If object crossed the line but wasn't counted
-            elif tid in self.crossed_ids and tid not in self.counted:
-                self.missed_cross.add(tid)
-
-            # If object was in history, crossed line, but not counted - check side for missed IN/OUT
-            elif tid not in self.counted and tid in self.hist and tid in self.crossed_ids:
-                cx, cy = self.hist[tid]
-                s = self.side(cx, cy, *self.line_p1, *self.line_p2)
-
-                if s < 0:
-                    self.missed_in.add(tid)
-                else:
-                    self.missed_out.add(tid)
-
             self.hist.pop(tid, None)
             self.last_seen.pop(tid, None)
 
@@ -187,12 +157,8 @@ class ObjectCounter:
         self.crossed_ids.clear()
         self.counted.clear()
         self.false_detections.clear()
-        self.missed_in.clear()
-        self.missed_out.clear()
-        self.missed_cross.clear()
         self.in_count = 0
         self.out_count = 0
-        self.cross_count = 0
         self.false_count = 0
         
         # Start new session
@@ -246,7 +212,6 @@ class ObjectCounter:
 
                         if s1 * s2 < 0:  # Crossed the line
                             self.crossed_ids.add(tid)
-                            self.cross_count += 1
 
                             if tid not in self.counted:
                                 if s2 > 0:  # Going IN
@@ -271,9 +236,9 @@ class ObjectCounter:
 
             # ================= DISPLAY PANEL =================
 
-            # Main overlay panel - increased height for new row
+            # Main overlay panel
             overlay = frame.copy()
-            cv2.rectangle(overlay, (0, 0), (1020, 140), (0, 0, 0), -1)
+            cv2.rectangle(overlay, (0, 0), (1020, 100), (0, 0, 0), -1)
             frame = cv2.addWeighted(overlay, 0.4, frame, 0.6, 0)
 
             # --------- TITLE BAR ---------
@@ -281,55 +246,28 @@ class ObjectCounter:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (100, 200, 255), 3)
             cv2.circle(frame, (250, 24), 7, (0, 255, 0), -1)
 
-            # --------- ROW 1: COUNTS ---------
-            y_row1 = 70
+            # --------- COUNTS ROW ---------
+            y_row = 70
             font_size = 0.9
             thickness = 3
             
             # Total IN
-            cv2.putText(frame, "IN:", (15, y_row1),
+            cv2.putText(frame, "IN:", (15, y_row),
                         cv2.FONT_HERSHEY_SIMPLEX, font_size, (0, 255, 150), thickness)
-            cv2.putText(frame, str(self.in_count), (90, y_row1),
+            cv2.putText(frame, str(self.in_count), (90, y_row),
                         cv2.FONT_HERSHEY_SIMPLEX, font_size, (255, 255, 255), thickness)
 
             # Total OUT
-            cv2.putText(frame, "OUT:", (180, y_row1),
+            cv2.putText(frame, "OUT:", (200, y_row),
                         cv2.FONT_HERSHEY_SIMPLEX, font_size, (100, 180, 255), thickness)
-            cv2.putText(frame, str(self.out_count), (270, y_row1),
+            cv2.putText(frame, str(self.out_count), (300, y_row),
                         cv2.FONT_HERSHEY_SIMPLEX, font_size, (255, 255, 255), thickness)
 
-            # Cross Count
-            cv2.putText(frame, "CROSS:", (380, y_row1),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 255, 255), 2)
-            cv2.putText(frame, str(self.cross_count), (510, y_row1),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2)
-
             # False Detections
-            cv2.putText(frame, "FALSE:", (600, y_row1),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 100, 255), 2)
-            cv2.putText(frame, str(self.false_count), (720, y_row1),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2)
-
-            # --------- ROW 2: MISSED COUNTS ---------
-            y_row2 = 110
-            
-            # Missed IN
-            cv2.putText(frame, "MISS IN:", (15, y_row2),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.65, (100, 255, 255), 2)
-            cv2.putText(frame, str(len(self.missed_in)), (155, y_row2),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
-
-            # Missed OUT
-            cv2.putText(frame, "MISS OUT:", (250, y_row2),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 100, 255), 2)
-            cv2.putText(frame, str(len(self.missed_out)), (410, y_row2),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
-
-            # Missed CROSS
-            cv2.putText(frame, "MISS CROSS:", (500, y_row2),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.65, (100, 100, 255), 2)
-            cv2.putText(frame, str(len(self.missed_cross)), (680, y_row2),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
+            cv2.putText(frame, "FALSE:", (420, y_row),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_size, (0, 100, 255), thickness)
+            cv2.putText(frame, str(self.false_count), (560, y_row),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_size, (255, 255, 255), thickness)
 
             if self.show:
                 cv2.imshow("ObjectCounter", frame)
