@@ -317,7 +317,7 @@ class ObjectCounter:
 
             elif tid not in self.counted and tid in self.hist:
                 cx, cy = self.hist[tid]
-                s = self.side(cx, cy, *self.line_p1, *self.line_p2)
+                s = self.side(cx, cy, *self.line_p2, *self.line_p1)
 
                 if s > 0:
                     self.missed_in.add(tid)
