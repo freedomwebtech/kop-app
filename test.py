@@ -205,13 +205,15 @@ class ObjectCounter:
                 cx, cy = self.hist[tid]
                 s = self.side(cx, cy, *self.line_p1, *self.line_p2)
 
-                # ✅ FIXED: Corrected the logic
-                if s > 0:
-                    # Positive side = IN side, so if lost here = missed OUT
-                    self.missed_out.add(tid)
-                else:
-                    # Negative side = OUT side, so if lost here = missed IN
+                # ✅ FIXED: Based on crossing direction logic
+                # s2 > 0 means object moved TO positive side = IN direction
+                # s2 < 0 means object moved TO negative side = OUT direction
+                if s < 0:
+                    # Negative side = before crossing IN, so missed IN
                     self.missed_in.add(tid)
+                else:
+                    # Positive side = after crossing IN, so missed OUT
+                    self.missed_out.add(tid)
 
             self.hist.pop(tid, None)
             self.last_seen.pop(tid, None)
