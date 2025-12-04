@@ -14,13 +14,15 @@ from datetime import datetime
 class ObjectCounter:
     def __init__(self, source, model="best_float32.tflite",
                  classes_to_count=[0], show=True,
-                 json_file="line_coords_back.json"):
+                 json_file="line_coords_back.json",
+                 line_offset=30):
 
         self.source = source
         self.model = YOLO(model)
         self.names = self.model.names
         self.classes = classes_to_count
         self.show = show
+        self.line_offset = line_offset  # Offset in pixels for detection zone
 
         # -------- RTSP or File --------
         if isinstance(source, str) and source.startswith("rtsp://"):
@@ -41,13 +43,6 @@ class ObjectCounter:
         self.last_seen = {}
         self.crossed_ids = set()
         self.counted = set()
-
-        # -------- Movement Detection --------
-        self.movement_hist = {}  # Store position history for movement detection
-        self.stationary_frames = {}  # Count frames object hasn't moved
-        self.movement_threshold = 10  # Minimum pixels to consider as movement
-        self.stationary_limit = 30  # Frames before considering object stationary
-        self.stationary_ids = set()  # IDs that are stationary
 
         # -------- Counters --------
         self.in_count = 0
@@ -137,55 +132,37 @@ class ObjectCounter:
     def side(self, px, py, x1, y1, x2, y2):
         return (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
 
-    # ---------------- Movement Detection ----------------
-    def check_movement(self, tid, cx, cy):
-        """Check if object is moving or stationary"""
-        if tid not in self.movement_hist:
-            self.movement_hist[tid] = [(cx, cy)]
-            self.stationary_frames[tid] = 0
-            return True
+    # ---------------- Calculate Offset Lines ----------------
+    def get_offset_lines(self):
+        """Calculate parallel offset lines for detection zone"""
+        if not self.line_p1 or not self.line_p2:
+            return None, None
         
-        # Add current position to history
-        self.movement_hist[tid].append((cx, cy))
+        x1, y1 = self.line_p1
+        x2, y2 = self.line_p2
         
-        # Keep only last 10 positions for efficiency
-        if len(self.movement_hist[tid]) > 10:
-            self.movement_hist[tid].pop(0)
+        # Calculate perpendicular direction
+        dx = x2 - x1
+        dy = y2 - y1
+        length = np.sqrt(dx**2 + dy**2)
         
-        # Check movement from last position
-        if len(self.movement_hist[tid]) >= 2:
-            prev_x, prev_y = self.movement_hist[tid][-2]
-            distance = np.sqrt((cx - prev_x)**2 + (cy - prev_y)**2)
-            
-            if distance < self.movement_threshold:
-                self.stationary_frames[tid] += 1
-            else:
-                self.stationary_frames[tid] = 0
-                
-            # If stationary for too long, mark as stationary
-            if self.stationary_frames[tid] >= self.stationary_limit:
-                if tid not in self.stationary_ids:
-                    self.stationary_ids.add(tid)
-                    print(f"⚠️ STATIONARY DETECTED - ID:{tid} - Removing from tracking")
-                return False
+        # Normalized perpendicular vector
+        perp_x = -dy / length
+        perp_y = dx / length
         
-        return True
-
-    # ---------------- Remove Stationary Object ----------------
-    def remove_stationary_object(self, tid):
-        """Remove stationary object from all tracking data"""
-        # Remove from missed counts if it was there
-        self.missed_in.discard(tid)
-        self.missed_out.discard(tid)
-        self.missed_cross.discard(tid)
+        # Offset line 1 (positive side)
+        offset1_p1 = (int(x1 + perp_x * self.line_offset), 
+                      int(y1 + perp_y * self.line_offset))
+        offset1_p2 = (int(x2 + perp_x * self.line_offset), 
+                      int(y2 + perp_y * self.line_offset))
         
-        # Remove from tracking data
-        self.hist.pop(tid, None)
-        self.last_seen.pop(tid, None)
-        self.crossed_ids.discard(tid)
-        self.counted.discard(tid)
-        self.movement_hist.pop(tid, None)
-        self.stationary_frames.pop(tid, None)
+        # Offset line 2 (negative side)
+        offset2_p1 = (int(x1 - perp_x * self.line_offset), 
+                      int(y1 - perp_y * self.line_offset))
+        offset2_p2 = (int(x2 - perp_x * self.line_offset), 
+                      int(y2 - perp_y * self.line_offset))
+        
+        return (offset1_p1, offset1_p2), (offset2_p1, offset2_p2)
 
     # ---------------- MISSED TRACK HANDLER ----------------
     def check_lost_ids(self):
@@ -197,12 +174,6 @@ class ObjectCounter:
                 lost.append(tid)
 
         for tid in lost:
-            # Skip if it's a stationary object
-            if tid in self.stationary_ids:
-                self.remove_stationary_object(tid)
-                self.stationary_ids.discard(tid)
-                continue
-                
             if tid in self.crossed_ids and tid not in self.counted:
                 self.missed_cross.add(tid)
 
@@ -210,6 +181,8 @@ class ObjectCounter:
                 cx, cy = self.hist[tid]
                 s = self.side(cx, cy, *self.line_p1, *self.line_p2)
 
+                # s > 0 means positive side (after crossing IN = waiting to go OUT)
+                # s < 0 means negative side (before crossing IN = waiting to come IN)
                 if s < 0:
                     self.missed_in.add(tid)
                 else:
@@ -217,16 +190,17 @@ class ObjectCounter:
 
             self.hist.pop(tid, None)
             self.last_seen.pop(tid, None)
-            self.movement_hist.pop(tid, None)
-            self.stationary_frames.pop(tid, None)
 
     # ---------------- Reset Function ----------------
     def reset_all_data(self):
         """Reset all tracking data and start new session"""
+        # End current session before resetting
         self.end_current_session()
+        
+        # Print session summary to console
         self.print_session_summary()
         
-        # Reset all data
+        # Reset counters
         self.hist.clear()
         self.last_seen.clear()
         self.crossed_ids.clear()
@@ -234,18 +208,17 @@ class ObjectCounter:
         self.missed_in.clear()
         self.missed_out.clear()
         self.missed_cross.clear()
-        self.movement_hist.clear()
-        self.stationary_frames.clear()
-        self.stationary_ids.clear()
         self.in_count = 0
         self.out_count = 0
         
+        # Start new session
         self.start_new_session()
         print("✅ RESET DONE - New session started")
 
     # ---------------- Main Loop ----------------
     def run(self):
         print("RUNNING... Press O to Reset & Show Summary | ESC to Exit")
+        print(f"Line offset: {self.line_offset} pixels")
 
         while True:
             if self.is_rtsp:
@@ -264,9 +237,28 @@ class ObjectCounter:
             for pt in self.temp_points:
                 cv2.circle(frame, pt, 5, (0, 0, 255), -1)
 
+            # Draw main line and offset lines
             if self.line_p1:
+                # Main counting line (white)
                 cv2.line(frame, self.line_p1, self.line_p2,
-                         (255, 255, 255), 2)
+                         (255, 255, 255), 3)
+                
+                # Get and draw offset lines (detection zone)
+                offset_lines = self.get_offset_lines()
+                if offset_lines[0] and offset_lines[1]:
+                    # Offset line 1 (cyan - dashed effect)
+                    cv2.line(frame, offset_lines[0][0], offset_lines[0][1],
+                             (255, 255, 0), 1)
+                    # Offset line 2 (cyan - dashed effect)
+                    cv2.line(frame, offset_lines[1][0], offset_lines[1][1],
+                             (255, 255, 0), 1)
+                    
+                    # Draw detection zone polygon (semi-transparent)
+                    pts = np.array([offset_lines[0][0], offset_lines[0][1],
+                                   offset_lines[1][1], offset_lines[1][0]], np.int32)
+                    overlay = frame.copy()
+                    cv2.fillPoly(overlay, [pts], (255, 255, 0))
+                    frame = cv2.addWeighted(overlay, 0.1, frame, 0.9, 0)
 
             results = self.model.track(
                 frame, persist=True, classes=self.classes, conf=0.80)
@@ -279,14 +271,6 @@ class ObjectCounter:
                     x1, y1, x2, y2 = box
                     cx = int((x1 + x2) / 2)
                     cy = int((y1 + y2) / 2)
-
-                    # Check if object is moving
-                    is_moving = self.check_movement(tid, cx, cy)
-                    
-                    # Skip stationary objects
-                    if not is_moving:
-                        self.remove_stationary_object(tid)
-                        continue
 
                     self.last_seen[tid] = self.frame_count
 
@@ -310,7 +294,7 @@ class ObjectCounter:
 
                     self.hist[tid] = (cx, cy)
 
-                    # Draw bounding box (green for moving objects)
+                    # Draw bounding box
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                     cv2.putText(frame, f"ID:{tid}", (x1, y1 - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 200, 0), 2)
@@ -321,6 +305,7 @@ class ObjectCounter:
 
             # ================= DISPLAY PANEL =================
 
+            # Main overlay panel
             overlay = frame.copy()
             cv2.rectangle(overlay, (0, 0), (1020, 100), (0, 0, 0), -1)
             frame = cv2.addWeighted(overlay, 0.4, frame, 0.6, 0)
@@ -392,10 +377,12 @@ class ObjectCounter:
 # ==========================================================
 
 if __name__ == "__main__":
+    # Example usage:
     counter = ObjectCounter(
         source="your_video.mp4",  # or 0 for webcam, or "rtsp://..."
         model="best_float32.tflite",
         classes_to_count=[0],
-        show=True
+        show=True,
+        line_offset=30  # Offset in pixels (adjust as needed: 20, 30, 40, 50, etc.)
     )
     counter.run()
