@@ -64,14 +64,6 @@ class ObjectCounter:
             self.cap = cv2.VideoCapture(source)
             self.is_rtsp = False
 
-        # Get FPS for time calculation
-        if not self.is_rtsp:
-            self.fps = self.cap.get(cv2.CAP_PROP_FPS)
-            if self.fps == 0:
-                self.fps = 30  # Default fallback
-        else:
-            self.fps = 30  # Default for RTSP
-
         # -------- Session Data --------
         self.session_start_time = datetime.now()
         self.current_session_data = None
@@ -86,10 +78,6 @@ class ObjectCounter:
         # ✅ Store color detected at crossing point
         self.color_at_crossing = {}
 
-        # ✅ NEW: Track IN crossings with timestamp for delayed color detection
-        self.pending_in_detections = {}  # {track_id: frame_number_when_crossed}
-        self.delay_frames = int(0.55 * self.fps)  # 0.4 seconds worth of frames
-
         # -------- Counters --------
         self.in_count = 0
         self.out_count = 0
@@ -103,12 +91,20 @@ class ObjectCounter:
         self.missed_cross = set()
         self.max_missing_frames = 40
 
-        # -------- Line --------
+        # -------- Counting Line --------
         self.line_p1 = None
         self.line_p2 = None
+        
+        # -------- 🆕 Color Detection Line --------
+        self.color_line_p1 = None
+        self.color_line_p2 = None
+        
+        # -------- Mouse Drawing Control --------
         self.temp_points = []
+        self.drawing_mode = "counting"  # "counting" or "color"
+        
         self.json_file = json_file
-        self.load_line()
+        self.load_lines()
 
         self.frame_count = 0
 
@@ -180,25 +176,50 @@ class ObjectCounter:
         if event == cv2.EVENT_LBUTTONDOWN:
             self.temp_points.append((x, y))
             if len(self.temp_points) == 2:
-                self.line_p1, self.line_p2 = self.temp_points
+                if self.drawing_mode == "counting":
+                    self.line_p1, self.line_p2 = self.temp_points
+                    print("✅ Counting line set!")
+                elif self.drawing_mode == "color":
+                    self.color_line_p1, self.color_line_p2 = self.temp_points
+                    print("✅ Color detection line set!")
+                
                 self.temp_points = []
-                self.save_line()
+                self.save_lines()
 
-    # ---------------- Save / Load Line ----------------
-    def save_line(self):
+    # ---------------- Save / Load Lines ----------------
+    def save_lines(self):
         with open(self.json_file, "w") as f:
-            json.dump({"line_p1": self.line_p1, "line_p2": self.line_p2}, f)
+            json.dump({
+                "line_p1": self.line_p1, 
+                "line_p2": self.line_p2,
+                "color_line_p1": self.color_line_p1,
+                "color_line_p2": self.color_line_p2
+            }, f)
 
-    def load_line(self):
+    def load_lines(self):
         if os.path.exists(self.json_file):
             with open(self.json_file) as f:
                 data = json.load(f)
-                self.line_p1 = tuple(data["line_p1"])
-                self.line_p2 = tuple(data["line_p2"])
+                self.line_p1 = tuple(data["line_p1"]) if data.get("line_p1") else None
+                self.line_p2 = tuple(data["line_p2"]) if data.get("line_p2") else None
+                self.color_line_p1 = tuple(data["color_line_p1"]) if data.get("color_line_p1") else None
+                self.color_line_p2 = tuple(data["color_line_p2"]) if data.get("color_line_p2") else None
 
     # ---------------- Utility ----------------
     def side(self, px, py, x1, y1, x2, y2):
         return (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
+
+    # 🆕 Check if object crossed color detection line
+    def crossed_color_line(self, tid, cx, cy):
+        """Check if object has crossed the color detection line"""
+        if not self.color_line_p1 or tid not in self.hist:
+            return False
+        
+        px, py = self.hist[tid]
+        s1 = self.side(px, py, *self.color_line_p1, *self.color_line_p2)
+        s2 = self.side(cx, cy, *self.color_line_p1, *self.color_line_p2)
+        
+        return s1 * s2 < 0  # Different signs = crossed
 
     # ================= MISSED TRACK HANDLER =================
     def check_lost_ids(self):
@@ -215,9 +236,9 @@ class ObjectCounter:
 
             elif tid not in self.counted and tid in self.hist:
                 cx, cy = self.hist[tid]
-                s = self.side(cx, cy, *self.line_p1, *self.line_p2)
+                s = self.side(cx, cy, *self.line_p2, *self.line_p1)
 
-                if s > 0:
+                if s < 0:
                     self.missed_in.add(tid)
                 else:
                     self.missed_out.add(tid)
@@ -225,18 +246,13 @@ class ObjectCounter:
             self.hist.pop(tid, None)
             self.last_seen.pop(tid, None)
             self.color_at_crossing.pop(tid, None)
-            self.pending_in_detections.pop(tid, None)  # Clean up pending detections
 
     # ---------------- Reset Function ----------------
     def reset_all_data(self):
         """Reset all tracking data and start new session"""
-        # End current session before resetting
         self.end_current_session()
-        
-        # Print session summary to console
         self.print_session_summary()
         
-        # Reset counters
         self.hist.clear()
         self.last_seen.clear()
         self.crossed_ids.clear()
@@ -247,18 +263,21 @@ class ObjectCounter:
         self.missed_in.clear()
         self.missed_out.clear()
         self.missed_cross.clear()
-        self.pending_in_detections.clear()
         self.in_count = 0
         self.out_count = 0
         
-        # Start new session
         self.start_new_session()
         print("✅ RESET DONE - New session started")
 
     # ---------------- Main Loop ----------------
     def run(self):
-        print("RUNNING... Press O to Reset & Show Summary | ESC to Exit")
-        print(f"FPS: {self.fps}, Delay frames for 0.4 seconds: {self.delay_frames}")
+        print("\n" + "="*60)
+        print("CONTROLS:")
+        print("  C = Set Counting Line (2 clicks)")
+        print("  D = Set Color Detection Line (2 clicks)")
+        print("  O = Reset & Show Summary")
+        print("  ESC = Exit")
+        print("="*60 + "\n")
 
         while True:
             if self.is_rtsp:
@@ -274,12 +293,29 @@ class ObjectCounter:
 
             frame = cv2.resize(frame, (1020, 600))
 
+            # Draw temporary points
             for pt in self.temp_points:
                 cv2.circle(frame, pt, 5, (0, 0, 255), -1)
 
+            # Draw counting line (WHITE)
             if self.line_p1:
-                cv2.line(frame, self.line_p1, self.line_p2,
-                         (255, 255, 255), 2)
+                cv2.line(frame, self.line_p1, self.line_p2, (255, 255, 255), 3)
+                cv2.putText(frame, "COUNT", 
+                           (self.line_p1[0] + 10, self.line_p1[1] - 10),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+            # 🆕 Draw color detection line (CYAN)
+            if self.color_line_p1:
+                cv2.line(frame, self.color_line_p1, self.color_line_p2, (255, 255, 0), 3)
+                cv2.putText(frame, "COLOR", 
+                           (self.color_line_p1[0] + 10, self.color_line_p1[1] - 10),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+
+            # Show current drawing mode
+            mode_text = f"Mode: {self.drawing_mode.upper()}"
+            mode_color = (255, 255, 255) if self.drawing_mode == "counting" else (255, 255, 0)
+            cv2.putText(frame, mode_text, (850, 30),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, mode_color, 2)
 
             results = self.model.track(
                 frame, persist=True, classes=self.classes, conf=0.80)
@@ -295,95 +331,75 @@ class ObjectCounter:
 
                     self.last_seen[tid] = self.frame_count
 
+                    # 🆕 Detect color when crossing color line
+                    if self.color_line_p1 and self.crossed_color_line(tid, cx, cy):
+                        color_name = detect_box_color(frame, box)
+                        self.color_at_crossing[tid] = color_name
+                        print(f"🎨 ID:{tid} Color detected at color line: {color_name}")
+
                     if tid in self.hist:
                         px, py = self.hist[tid]
                         s1 = self.side(px, py, *self.line_p1, *self.line_p2)
                         s2 = self.side(cx, cy, *self.line_p1, *self.line_p2)
 
-                        # Check if object crossed the line
-                        if s1 * s2 < 0:  # Crossed the line
+                        # Check counting line crossing
+                        if s1 * s2 < 0:
                             self.crossed_ids.add(tid)
 
                             if tid not in self.counted:
-                                # Determine direction
-                                if s2 > 0:  # Going IN (positive side)
-                                    # ✅ Schedule color detection for 0.4 seconds later
-                                    self.pending_in_detections[tid] = self.frame_count
-                                    self.in_count += 1
-                                    print(f"📦 IN Detected - ID:{tid} (Color will be detected after 0.4 seconds)")
-                                    
-                                else:  # Going OUT (negative side)
-                                    # For OUT: Detect color immediately
+                                # Get stored color or detect new
+                                if tid in self.color_at_crossing:
+                                    color_name = self.color_at_crossing[tid]
+                                else:
                                     color_name = detect_box_color(frame, box)
+                                
+                                if s2 > 0:  # Going IN
+                                    self.in_count += 1
+                                    self.color_in_count[color_name] = self.color_in_count.get(color_name, 0) + 1
+                                    print(f"✅ IN - ID:{tid} Color:{color_name}")
                                     
+                                else:  # Going OUT
                                     self.out_count += 1
                                     self.color_out_count[color_name] = self.color_out_count.get(color_name, 0) + 1
                                     print(f"✅ OUT - ID:{tid} Color:{color_name}")
 
                                 self.counted.add(tid)
-                    
-                    # ✅ Check if it's time to detect color for pending IN detections
-                    if tid in self.pending_in_detections:
-                        frames_since_crossing = self.frame_count - self.pending_in_detections[tid]
-                        
-                        if frames_since_crossing >= self.delay_frames:
-                            # Detect color now (0.4 seconds have passed)
-                            color_name = detect_box_color(frame, box)
-                            self.color_in_count[color_name] = self.color_in_count.get(color_name, 0) + 1
-                            self.color_at_crossing[tid] = color_name
-                            print(f"✅ IN Color Detected - ID:{tid} Color:{color_name} (after 0.4 seconds)")
-                            
-                            # Remove from pending
-                            del self.pending_in_detections[tid]
 
                     self.hist[tid] = (cx, cy)
 
-                    # Display current detected color (if available)
-                    if tid in self.color_at_crossing:
-                        display_color = self.color_at_crossing[tid]
-                    elif tid in self.pending_in_detections:
-                        display_color = "Pending..."
-                    else:
-                        display_color = detect_box_color(frame, box)
+                    # Display color
+                    display_color = self.color_at_crossing.get(tid, "Unknown")
                     
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                     cv2.putText(frame, f"{display_color}", (x1, y1 - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 200, 0), 2)
 
-            # ✅ MISSED CHECK ACTIVE
             if self.line_p1:
                 self.check_lost_ids()
 
-            # ================= ENHANCED DISPLAY WITH LARGER FONTS =================
-
-            # Main overlay panel
+            # ================= DISPLAY =================
             overlay = frame.copy()
             cv2.rectangle(overlay, (0, 0), (1020, 160), (0, 0, 0), -1)
             frame = cv2.addWeighted(overlay, 0.35, frame, 0.65, 0)
 
-            # --------- TITLE BAR ---------
             cv2.putText(frame, "TRACKING SYSTEM", (15, 32),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (100, 200, 255), 3)
             cv2.circle(frame, (250, 24), 7, (0, 255, 0), -1)
 
-            # --------- TOTAL COUNTS ROW ---------
             y_row1 = 65
             font_large = 0.8
             thickness_bold = 3
             
-            # Total IN
             cv2.putText(frame, "IN:", (15, y_row1),
                         cv2.FONT_HERSHEY_SIMPLEX, font_large, (0, 255, 150), thickness_bold)
             cv2.putText(frame, str(self.in_count), (75, y_row1),
                         cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
 
-            # Total OUT
             cv2.putText(frame, "OUT:", (150, y_row1),
                         cv2.FONT_HERSHEY_SIMPLEX, font_large, (100, 180, 255), thickness_bold)
             cv2.putText(frame, str(self.out_count), (230, y_row1),
                         cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
 
-            # Missed counts
             cv2.putText(frame, "MISS IN:", (320, y_row1),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.55, (100, 255, 255), 2)
             cv2.putText(frame, str(len(self.missed_in)), (430, y_row1),
@@ -399,10 +415,8 @@ class ObjectCounter:
             cv2.putText(frame, str(len(self.missed_cross)), (770, y_row1),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
 
-            # --------- SEPARATOR LINE ---------
             cv2.line(frame, (10, 85), (1010, 85), (100, 100, 100), 2)
 
-            # --------- BROWN BOX COUNTS ROW ---------
             y_row2 = 118
             brown_in = self.color_in_count.get("Brown", 0)
             brown_out = self.color_out_count.get("Brown", 0)
@@ -420,7 +434,6 @@ class ObjectCounter:
             cv2.putText(frame, str(brown_out), (570, y_row2),
                         cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
 
-            # --------- WHITE BOX COUNTS ROW ---------
             y_row3 = 150
             white_in = self.color_in_count.get("White", 0)
             white_out = self.color_out_count.get("White", 0)
@@ -442,13 +455,22 @@ class ObjectCounter:
                 cv2.imshow("ObjectCounter", frame)
                 key = cv2.waitKey(1) & 0xFF
 
-                if key == ord('o') or key == ord('O'):
+                if key == ord('c') or key == ord('C'):
+                    self.drawing_mode = "counting"
+                    self.temp_points = []
+                    print("📏 Counting line mode - Click 2 points")
+
+                elif key == ord('d') or key == ord('D'):
+                    self.drawing_mode = "color"
+                    self.temp_points = []
+                    print("🎨 Color detection line mode - Click 2 points")
+
+                elif key == ord('o') or key == ord('O'):
                     self.reset_all_data()
 
                 elif key == 27:
                     break
 
-        # Print final session summary before exit
         self.end_current_session()
         self.print_session_summary()
 
@@ -465,9 +487,8 @@ class ObjectCounter:
 # ==========================================================
 
 if __name__ == "__main__":
-    # Example usage:
     counter = ObjectCounter(
-        source="your_video.mp4",  # or 0 for webcam, or "rtsp://..."
+        source="your_video.mp4",
         model="best_float32.tflite",
         classes_to_count=[0],
         show=True
