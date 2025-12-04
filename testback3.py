@@ -42,11 +42,14 @@ class ObjectCounter:
         self.crossed_ids = set()
         self.counted = set()
         self.false_detections = set()  # Track IDs that didn't cross
+        self.direction_tracking = {}  # Track which direction object should go
 
         # -------- Counters --------
         self.in_count = 0
         self.out_count = 0
-        self.false_count = 0  # Count of false detections
+        self.false_count = 0
+        self.miss_in_count = 0
+        self.miss_out_count = 0
 
         # -------- MISSED LOGIC --------
         self.max_missing_frames = 40
@@ -73,7 +76,9 @@ class ObjectCounter:
             'end_time': None,
             'in_count': 0,
             'out_count': 0,
-            'false_count': 0
+            'false_count': 0,
+            'miss_in_count': 0,
+            'miss_out_count': 0
         }
 
     def end_current_session(self):
@@ -83,6 +88,8 @@ class ObjectCounter:
             self.current_session_data['in_count'] = self.in_count
             self.current_session_data['out_count'] = self.out_count
             self.current_session_data['false_count'] = self.false_count
+            self.current_session_data['miss_in_count'] = self.miss_in_count
+            self.current_session_data['miss_out_count'] = self.miss_out_count
 
     def print_session_summary(self):
         """Print session summary to console"""
@@ -96,6 +103,8 @@ class ObjectCounter:
         print(f"IN Count:      {self.current_session_data['in_count']}")
         print(f"OUT Count:     {self.current_session_data['out_count']}")
         print(f"False Count:   {self.current_session_data['false_count']}")
+        print(f"Miss IN:       {self.current_session_data['miss_in_count']}")
+        print(f"Miss OUT:      {self.current_session_data['miss_out_count']}")
         print("=" * 80 + "\n")
 
     # ---------------- Mouse ----------------
@@ -133,14 +142,27 @@ class ObjectCounter:
                 lost.append(tid)
 
         for tid in lost:
+            # If object crossed the line but was not counted
+            if tid in self.crossed_ids and tid not in self.counted:
+                # Check which direction it was supposed to go
+                if tid in self.direction_tracking:
+                    expected_direction = self.direction_tracking[tid]
+                    if expected_direction == "IN":
+                        self.miss_in_count += 1
+                        print(f"⚠️ MISS IN - ID:{tid} (crossed but not counted as IN)")
+                    else:  # OUT
+                        self.miss_out_count += 1
+                        print(f"⚠️ MISS OUT - ID:{tid} (crossed but not counted as OUT)")
+
             # If object was detected but never crossed the line - mark as FALSE
-            if tid not in self.crossed_ids and tid not in self.false_detections:
+            elif tid not in self.crossed_ids and tid not in self.false_detections:
                 self.false_detections.add(tid)
                 self.false_count += 1
                 print(f"❌ FALSE - ID:{tid} (detected but didn't cross)")
 
             self.hist.pop(tid, None)
             self.last_seen.pop(tid, None)
+            self.direction_tracking.pop(tid, None)
 
     # ---------------- Reset Function ----------------
     def reset_all_data(self):
@@ -157,9 +179,12 @@ class ObjectCounter:
         self.crossed_ids.clear()
         self.counted.clear()
         self.false_detections.clear()
+        self.direction_tracking.clear()
         self.in_count = 0
         self.out_count = 0
         self.false_count = 0
+        self.miss_in_count = 0
+        self.miss_out_count = 0
         
         # Start new session
         self.start_new_session()
@@ -213,6 +238,12 @@ class ObjectCounter:
                         if s1 * s2 < 0:  # Crossed the line
                             self.crossed_ids.add(tid)
 
+                            # Track expected direction
+                            if s2 > 0:
+                                self.direction_tracking[tid] = "IN"
+                            else:
+                                self.direction_tracking[tid] = "OUT"
+
                             if tid not in self.counted:
                                 if s2 > 0:  # Going IN
                                     self.in_count += 1
@@ -236,9 +267,9 @@ class ObjectCounter:
 
             # ================= DISPLAY PANEL =================
 
-            # Main overlay panel
+            # Main overlay panel - increased height for two rows
             overlay = frame.copy()
-            cv2.rectangle(overlay, (0, 0), (1020, 100), (0, 0, 0), -1)
+            cv2.rectangle(overlay, (0, 0), (1020, 130), (0, 0, 0), -1)
             frame = cv2.addWeighted(overlay, 0.4, frame, 0.6, 0)
 
             # --------- TITLE BAR ---------
@@ -246,28 +277,45 @@ class ObjectCounter:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (100, 200, 255), 3)
             cv2.circle(frame, (250, 24), 7, (0, 255, 0), -1)
 
-            # --------- COUNTS ROW ---------
-            y_row = 70
+            # --------- ROW 1: MAIN COUNTS ---------
+            y_row1 = 70
             font_size = 0.9
             thickness = 3
             
             # Total IN
-            cv2.putText(frame, "IN:", (15, y_row),
+            cv2.putText(frame, "IN:", (15, y_row1),
                         cv2.FONT_HERSHEY_SIMPLEX, font_size, (0, 255, 150), thickness)
-            cv2.putText(frame, str(self.in_count), (90, y_row),
+            cv2.putText(frame, str(self.in_count), (90, y_row1),
                         cv2.FONT_HERSHEY_SIMPLEX, font_size, (255, 255, 255), thickness)
 
             # Total OUT
-            cv2.putText(frame, "OUT:", (200, y_row),
+            cv2.putText(frame, "OUT:", (200, y_row1),
                         cv2.FONT_HERSHEY_SIMPLEX, font_size, (100, 180, 255), thickness)
-            cv2.putText(frame, str(self.out_count), (300, y_row),
+            cv2.putText(frame, str(self.out_count), (300, y_row1),
                         cv2.FONT_HERSHEY_SIMPLEX, font_size, (255, 255, 255), thickness)
 
             # False Detections
-            cv2.putText(frame, "FALSE:", (420, y_row),
+            cv2.putText(frame, "FALSE:", (420, y_row1),
                         cv2.FONT_HERSHEY_SIMPLEX, font_size, (0, 100, 255), thickness)
-            cv2.putText(frame, str(self.false_count), (560, y_row),
+            cv2.putText(frame, str(self.false_count), (560, y_row1),
                         cv2.FONT_HERSHEY_SIMPLEX, font_size, (255, 255, 255), thickness)
+
+            # --------- ROW 2: MISS COUNTS ---------
+            y_row2 = 110
+            font_size_small = 0.75
+            thickness_small = 2
+            
+            # Miss IN
+            cv2.putText(frame, "MISS IN:", (15, y_row2),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_size_small, (100, 255, 255), thickness_small)
+            cv2.putText(frame, str(self.miss_in_count), (160, y_row2),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_size_small, (255, 255, 255), thickness_small)
+
+            # Miss OUT
+            cv2.putText(frame, "MISS OUT:", (280, y_row2),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_size_small, (255, 100, 255), thickness_small)
+            cv2.putText(frame, str(self.miss_out_count), (445, y_row2),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_size_small, (255, 255, 255), thickness_small)
 
             if self.show:
                 cv2.imshow("ObjectCounter", frame)
