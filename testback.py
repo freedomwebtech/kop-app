@@ -88,7 +88,7 @@ class ObjectCounter:
 
         # ✅ NEW: Track IN crossings with timestamp for delayed color detection
         self.pending_in_detections = {}  # {track_id: frame_number_when_crossed}
-        self.delay_frames = int(1 * self.fps)  # 1 second worth of frames
+        self.delay_frames = int(0.5 * self.fps)  # 0.5 seconds worth of frames
 
         # -------- Counters --------
         self.in_count = 0
@@ -258,7 +258,7 @@ class ObjectCounter:
     # ---------------- Main Loop ----------------
     def run(self):
         print("RUNNING... Press O to Reset & Show Summary | ESC to Exit")
-        print(f"FPS: {self.fps}, Delay frames for 1 second: {self.delay_frames}")
+        print(f"FPS: {self.fps}, Delay frames for 0.5 seconds: {self.delay_frames}")
 
         while True:
             if self.is_rtsp:
@@ -307,10 +307,10 @@ class ObjectCounter:
                             if tid not in self.counted:
                                 # Determine direction
                                 if s2 > 0:  # Going IN (positive side)
-                                    # ✅ Schedule color detection for 1 second later
+                                    # ✅ Schedule color detection for 0.5 seconds later
                                     self.pending_in_detections[tid] = self.frame_count
                                     self.in_count += 1
-                                    print(f"📦 IN Detected - ID:{tid} (Color will be detected after 1 second)")
+                                    print(f"📦 IN Detected - ID:{tid} (Color will be detected after 0.5 seconds)")
                                     
                                 else:  # Going OUT (negative side)
                                     # For OUT: Detect color immediately
@@ -327,11 +327,11 @@ class ObjectCounter:
                         frames_since_crossing = self.frame_count - self.pending_in_detections[tid]
                         
                         if frames_since_crossing >= self.delay_frames:
-                            # Detect color now (1 second has passed)
+                            # Detect color now (0.5 seconds have passed)
                             color_name = detect_box_color(frame, box)
                             self.color_in_count[color_name] = self.color_in_count.get(color_name, 0) + 1
                             self.color_at_crossing[tid] = color_name
-                            print(f"✅ IN Color Detected - ID:{tid} Color:{color_name} (after 1 second)")
+                            print(f"✅ IN Color Detected - ID:{tid} Color:{color_name} (after 0.5 seconds)")
                             
                             # Remove from pending
                             del self.pending_in_detections[tid]
