@@ -14,15 +14,13 @@ from datetime import datetime
 class ObjectCounter:
     def __init__(self, source, model="best_float32.tflite",
                  classes_to_count=[0], show=True,
-                 json_file="line_coords_back.json",
-                 line_offset=30):
+                 json_file="line_coords_back.json"):
 
         self.source = source
         self.model = YOLO(model)
         self.names = self.model.names
         self.classes = classes_to_count
         self.show = show
-        self.line_offset = line_offset  # Offset in pixels for detection zone
 
         # -------- RTSP or File --------
         if isinstance(source, str) and source.startswith("rtsp://"):
@@ -43,10 +41,13 @@ class ObjectCounter:
         self.last_seen = {}
         self.crossed_ids = set()
         self.counted = set()
+        self.false_detections = set()  # NEW: Track IDs that didn't cross
 
         # -------- Counters --------
         self.in_count = 0
         self.out_count = 0
+        self.cross_count = 0  # NEW: Count of objects that crossed
+        self.false_count = 0  # NEW: Count of false detections
 
         # -------- MISSED LOGIC --------
         self.missed_in = set()
@@ -76,6 +77,8 @@ class ObjectCounter:
             'end_time': None,
             'in_count': 0,
             'out_count': 0,
+            'cross_count': 0,
+            'false_count': 0,
             'missed_in': 0,
             'missed_out': 0,
             'missed_cross': 0
@@ -87,6 +90,8 @@ class ObjectCounter:
             self.current_session_data['end_time'] = datetime.now().strftime('%H:%M:%S')
             self.current_session_data['in_count'] = self.in_count
             self.current_session_data['out_count'] = self.out_count
+            self.current_session_data['cross_count'] = self.cross_count
+            self.current_session_data['false_count'] = self.false_count
             self.current_session_data['missed_in'] = len(self.missed_in)
             self.current_session_data['missed_out'] = len(self.missed_out)
             self.current_session_data['missed_cross'] = len(self.missed_cross)
@@ -102,6 +107,8 @@ class ObjectCounter:
         print(f"End Time:      {self.current_session_data['end_time']}")
         print(f"IN Count:      {self.current_session_data['in_count']}")
         print(f"OUT Count:     {self.current_session_data['out_count']}")
+        print(f"Cross Count:   {self.current_session_data['cross_count']}")
+        print(f"False Count:   {self.current_session_data['false_count']}")
         print(f"Missed IN:     {self.current_session_data['missed_in']}")
         print(f"Missed OUT:    {self.current_session_data['missed_out']}")
         print(f"Missed Cross:  {self.current_session_data['missed_cross']}")
@@ -132,38 +139,6 @@ class ObjectCounter:
     def side(self, px, py, x1, y1, x2, y2):
         return (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
 
-    # ---------------- Calculate Offset Lines ----------------
-    def get_offset_lines(self):
-        """Calculate parallel offset lines for detection zone"""
-        if not self.line_p1 or not self.line_p2:
-            return None, None
-        
-        x1, y1 = self.line_p1
-        x2, y2 = self.line_p2
-        
-        # Calculate perpendicular direction
-        dx = x2 - x1
-        dy = y2 - y1
-        length = np.sqrt(dx**2 + dy**2)
-        
-        # Normalized perpendicular vector
-        perp_x = -dy / length
-        perp_y = dx / length
-        
-        # Offset line 1 (positive side)
-        offset1_p1 = (int(x1 + perp_x * self.line_offset), 
-                      int(y1 + perp_y * self.line_offset))
-        offset1_p2 = (int(x2 + perp_x * self.line_offset), 
-                      int(y2 + perp_y * self.line_offset))
-        
-        # Offset line 2 (negative side)
-        offset2_p1 = (int(x1 - perp_x * self.line_offset), 
-                      int(y1 - perp_y * self.line_offset))
-        offset2_p2 = (int(x2 - perp_x * self.line_offset), 
-                      int(y2 - perp_y * self.line_offset))
-        
-        return (offset1_p1, offset1_p2), (offset2_p1, offset2_p2)
-
     # ---------------- MISSED TRACK HANDLER ----------------
     def check_lost_ids(self):
         current = self.frame_count
@@ -174,15 +149,21 @@ class ObjectCounter:
                 lost.append(tid)
 
         for tid in lost:
+            # If object crossed the line but wasn't counted
             if tid in self.crossed_ids and tid not in self.counted:
                 self.missed_cross.add(tid)
 
+            # If object was detected but never crossed the line
+            elif tid not in self.crossed_ids and tid not in self.false_detections:
+                self.false_detections.add(tid)
+                self.false_count += 1
+                print(f"❌ FALSE - ID:{tid} (detected but didn't cross)")
+
+            # If object was in history but not counted
             elif tid not in self.counted and tid in self.hist:
                 cx, cy = self.hist[tid]
                 s = self.side(cx, cy, *self.line_p1, *self.line_p2)
 
-                # s > 0 means positive side (after crossing IN = waiting to go OUT)
-                # s < 0 means negative side (before crossing IN = waiting to come IN)
                 if s < 0:
                     self.missed_in.add(tid)
                 else:
@@ -205,11 +186,14 @@ class ObjectCounter:
         self.last_seen.clear()
         self.crossed_ids.clear()
         self.counted.clear()
+        self.false_detections.clear()
         self.missed_in.clear()
         self.missed_out.clear()
         self.missed_cross.clear()
         self.in_count = 0
         self.out_count = 0
+        self.cross_count = 0
+        self.false_count = 0
         
         # Start new session
         self.start_new_session()
@@ -218,7 +202,6 @@ class ObjectCounter:
     # ---------------- Main Loop ----------------
     def run(self):
         print("RUNNING... Press O to Reset & Show Summary | ESC to Exit")
-        print(f"Line offset: {self.line_offset} pixels")
 
         while True:
             if self.is_rtsp:
@@ -237,28 +220,10 @@ class ObjectCounter:
             for pt in self.temp_points:
                 cv2.circle(frame, pt, 5, (0, 0, 255), -1)
 
-            # Draw main line and offset lines
+            # Draw main counting line (white)
             if self.line_p1:
-                # Main counting line (white)
                 cv2.line(frame, self.line_p1, self.line_p2,
                          (255, 255, 255), 3)
-                
-                # Get and draw offset lines (detection zone)
-                offset_lines = self.get_offset_lines()
-                if offset_lines[0] and offset_lines[1]:
-                    # Offset line 1 (cyan - dashed effect)
-                    cv2.line(frame, offset_lines[0][0], offset_lines[0][1],
-                             (255, 255, 0), 1)
-                    # Offset line 2 (cyan - dashed effect)
-                    cv2.line(frame, offset_lines[1][0], offset_lines[1][1],
-                             (255, 255, 0), 1)
-                    
-                    # Draw detection zone polygon (semi-transparent)
-                    pts = np.array([offset_lines[0][0], offset_lines[0][1],
-                                   offset_lines[1][1], offset_lines[1][0]], np.int32)
-                    overlay = frame.copy()
-                    cv2.fillPoly(overlay, [pts], (255, 255, 0))
-                    frame = cv2.addWeighted(overlay, 0.1, frame, 0.9, 0)
 
             results = self.model.track(
                 frame, persist=True, classes=self.classes, conf=0.80)
@@ -281,6 +246,7 @@ class ObjectCounter:
 
                         if s1 * s2 < 0:  # Crossed the line
                             self.crossed_ids.add(tid)
+                            self.cross_count += 1
 
                             if tid not in self.counted:
                                 if s2 > 0:  # Going IN
@@ -299,15 +265,15 @@ class ObjectCounter:
                     cv2.putText(frame, f"ID:{tid}", (x1, y1 - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 200, 0), 2)
 
-            # Check for missed objects
+            # Check for missed objects and false detections
             if self.line_p1:
                 self.check_lost_ids()
 
             # ================= DISPLAY PANEL =================
 
-            # Main overlay panel
+            # Main overlay panel - increased height for new row
             overlay = frame.copy()
-            cv2.rectangle(overlay, (0, 0), (1020, 100), (0, 0, 0), -1)
+            cv2.rectangle(overlay, (0, 0), (1020, 140), (0, 0, 0), -1)
             frame = cv2.addWeighted(overlay, 0.4, frame, 0.6, 0)
 
             # --------- TITLE BAR ---------
@@ -315,39 +281,54 @@ class ObjectCounter:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (100, 200, 255), 3)
             cv2.circle(frame, (250, 24), 7, (0, 255, 0), -1)
 
-            # --------- COUNTS ROW ---------
-            y_row = 70
+            # --------- ROW 1: COUNTS ---------
+            y_row1 = 70
             font_size = 0.9
             thickness = 3
             
             # Total IN
-            cv2.putText(frame, "IN:", (15, y_row),
+            cv2.putText(frame, "IN:", (15, y_row1),
                         cv2.FONT_HERSHEY_SIMPLEX, font_size, (0, 255, 150), thickness)
-            cv2.putText(frame, str(self.in_count), (90, y_row),
+            cv2.putText(frame, str(self.in_count), (90, y_row1),
                         cv2.FONT_HERSHEY_SIMPLEX, font_size, (255, 255, 255), thickness)
 
             # Total OUT
-            cv2.putText(frame, "OUT:", (180, y_row),
+            cv2.putText(frame, "OUT:", (180, y_row1),
                         cv2.FONT_HERSHEY_SIMPLEX, font_size, (100, 180, 255), thickness)
-            cv2.putText(frame, str(self.out_count), (270, y_row),
+            cv2.putText(frame, str(self.out_count), (270, y_row1),
                         cv2.FONT_HERSHEY_SIMPLEX, font_size, (255, 255, 255), thickness)
 
+            # Cross Count
+            cv2.putText(frame, "CROSS:", (380, y_row1),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 255, 255), 2)
+            cv2.putText(frame, str(self.cross_count), (510, y_row1),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2)
+
+            # False Detections
+            cv2.putText(frame, "FALSE:", (600, y_row1),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 100, 255), 2)
+            cv2.putText(frame, str(self.false_count), (720, y_row1),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2)
+
+            # --------- ROW 2: MISSED COUNTS ---------
+            y_row2 = 110
+            
             # Missed IN
-            cv2.putText(frame, "MISS IN:", (380, y_row),
+            cv2.putText(frame, "MISS IN:", (15, y_row2),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.65, (100, 255, 255), 2)
-            cv2.putText(frame, str(len(self.missed_in)), (520, y_row),
+            cv2.putText(frame, str(len(self.missed_in)), (155, y_row2),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
 
             # Missed OUT
-            cv2.putText(frame, "MISS OUT:", (600, y_row),
+            cv2.putText(frame, "MISS OUT:", (250, y_row2),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 100, 255), 2)
-            cv2.putText(frame, str(len(self.missed_out)), (750, y_row),
+            cv2.putText(frame, str(len(self.missed_out)), (410, y_row2),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
 
             # Missed CROSS
-            cv2.putText(frame, "CROSS:", (830, y_row),
+            cv2.putText(frame, "MISS CROSS:", (500, y_row2),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.65, (100, 100, 255), 2)
-            cv2.putText(frame, str(len(self.missed_cross)), (940, y_row),
+            cv2.putText(frame, str(len(self.missed_cross)), (680, y_row2),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
 
             if self.show:
@@ -382,7 +363,6 @@ if __name__ == "__main__":
         source="your_video.mp4",  # or 0 for webcam, or "rtsp://..."
         model="best_float32.tflite",
         classes_to_count=[0],
-        show=True,
-        line_offset=30  # Offset in pixels (adjust as needed: 20, 30, 40, 50, etc.)
+        show=True
     )
     counter.run()
