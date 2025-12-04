@@ -11,16 +11,18 @@ from datetime import datetime
 #                HSV COLOR DETECTION (Brown + White)
 # ==========================================================
 
-BROWN_LOWER = np.array([5, 80, 60])
-BROWN_UPPER = np.array([20, 255, 255])
+# Adjusted HSV ranges for better detection
+BROWN_LOWER = np.array([0, 40, 40])
+BROWN_UPPER = np.array([30, 255, 200])
 
-WHITE_LOWER = np.array([0, 0, 200])
-WHITE_UPPER = np.array([180, 40, 255])
+WHITE_LOWER = np.array([0, 0, 180])
+WHITE_UPPER = np.array([180, 30, 255])
 
 def detect_box_color_in_polygon(frame, box, polygon_points):
     """Detect color only within the polygon area"""
     if polygon_points is None or len(polygon_points) < 3:
-        return "Unknown"
+        # If no polygon, detect in entire box
+        return detect_box_color_full(frame, box)
     
     x1, y1, x2, y2 = box
     roi = frame[y1:y2, x1:x2]
@@ -28,37 +30,77 @@ def detect_box_color_in_polygon(frame, box, polygon_points):
     if roi.size == 0:
         return "Unknown"
 
+    # Create mask for the bounding box
+    box_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+    cv2.rectangle(box_mask, (x1, y1), (x2, y2), 255, -1)
+    
     # Create mask for polygon
-    mask = np.zeros(roi.shape[:2], dtype=np.uint8)
+    poly_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+    pts = np.array(polygon_points, dtype=np.int32)
+    cv2.fillPoly(poly_mask, [pts], 255)
     
-    # Adjust polygon points to ROI coordinates
-    adjusted_points = []
-    for px, py in polygon_points:
-        new_x = px - x1
-        new_y = py - y1
-        if 0 <= new_x < roi.shape[1] and 0 <= new_y < roi.shape[0]:
-            adjusted_points.append([new_x, new_y])
+    # Combine masks - only detect in overlapping area
+    combined_mask = cv2.bitwise_and(box_mask, poly_mask)
     
-    if len(adjusted_points) < 3:
+    # Check if there's any overlap
+    if cv2.countNonZero(combined_mask) == 0:
         return "Unknown"
     
-    # Fill polygon area in mask
-    cv2.fillPoly(mask, [np.array(adjusted_points, dtype=np.int32)], 255)
+    # Convert to HSV
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     
-    # Apply mask to ROI
-    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-    
+    # Detect brown
     brown_mask = cv2.inRange(hsv, BROWN_LOWER, BROWN_UPPER)
-    brown_mask = cv2.bitwise_and(brown_mask, brown_mask, mask=mask)
-    brown_intensity = brown_mask.mean()
+    brown_mask = cv2.bitwise_and(brown_mask, combined_mask)
+    brown_pixels = cv2.countNonZero(brown_mask)
+    
+    # Detect white
+    white_mask = cv2.inRange(hsv, WHITE_LOWER, WHITE_UPPER)
+    white_mask = cv2.bitwise_and(white_mask, combined_mask)
+    white_pixels = cv2.countNonZero(white_mask)
+    
+    total_pixels = cv2.countNonZero(combined_mask)
+    
+    if total_pixels == 0:
+        return "Unknown"
+    
+    brown_percentage = (brown_pixels / total_pixels) * 100
+    white_percentage = (white_pixels / total_pixels) * 100
+    
+    print(f"🎨 Detection - Brown: {brown_percentage:.1f}%, White: {white_percentage:.1f}%")
+    
+    # Lower threshold for better detection
+    if brown_percentage > 15:
+        return "Brown"
+    elif white_percentage > 15:
+        return "White"
+    
+    return "Unknown"
+
+def detect_box_color_full(frame, box):
+    """Detect color in full bounding box (fallback)"""
+    x1, y1, x2, y2 = box
+    roi = frame[y1:y2, x1:x2]
+
+    if roi.size == 0:
+        return "Unknown"
+
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+
+    brown_mask = cv2.inRange(hsv, BROWN_LOWER, BROWN_UPPER)
+    brown_pixels = cv2.countNonZero(brown_mask)
 
     white_mask = cv2.inRange(hsv, WHITE_LOWER, WHITE_UPPER)
-    white_mask = cv2.bitwise_and(white_mask, white_mask, mask=mask)
-    white_intensity = white_mask.mean()
-
-    if brown_intensity > 20:
+    white_pixels = cv2.countNonZero(white_mask)
+    
+    total_pixels = roi.shape[0] * roi.shape[1]
+    
+    brown_percentage = (brown_pixels / total_pixels) * 100
+    white_percentage = (white_pixels / total_pixels) * 100
+    
+    if brown_percentage > 15:
         return "Brown"
-    elif white_intensity > 20:
+    elif white_percentage > 15:
         return "White"
 
     return "Unknown"
@@ -254,6 +296,7 @@ class ObjectCounter:
                 self.polygon_points = [tuple(pt) for pt in data["polygon_points"]]
                 if len(self.polygon_points) >= 3:
                     self.polygon_complete = True
+                    print(f"✅ Loaded polygon with {len(self.polygon_points)} points")
 
     # ---------------- Utility ----------------
     def side(self, px, py, x1, y1, x2, y2):
@@ -319,10 +362,16 @@ class ObjectCounter:
         print("  Right Click - Complete polygon (when in polygon mode)")
         print("  Press 'O' - Reset & Show Summary")
         print("  Press 'C' - Clear polygon")
+        print("  Press 'D' - Show debug HSV values")
         print("  ESC - Exit")
         print("=" * 80)
         print(f"FPS: {self.fps}, Delay frames for 0.4 seconds: {self.delay_frames}")
         print(f"Current mode: {self.drawing_mode.upper()}")
+        
+        if self.polygon_complete:
+            print(f"✅ Polygon loaded with {len(self.polygon_points)} points")
+
+        debug_mode = False
 
         while True:
             if self.is_rtsp:
@@ -337,6 +386,9 @@ class ObjectCounter:
                 continue
 
             frame = cv2.resize(frame, (1020, 600))
+            
+            # Create debug window for HSV visualization
+            debug_frame = frame.copy()
 
             # Draw temporary points
             for pt in self.temp_points:
@@ -346,21 +398,37 @@ class ObjectCounter:
             if self.line_p1:
                 cv2.line(frame, self.line_p1, self.line_p2, (255, 255, 255), 2)
 
-            # Draw polygon
+            # Draw polygon with enhanced visibility
             if len(self.polygon_points) > 0:
                 for i, pt in enumerate(self.polygon_points):
-                    cv2.circle(frame, pt, 5, (0, 255, 255), -1)
-                    cv2.putText(frame, str(i+1), (pt[0]+10, pt[1]), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+                    cv2.circle(frame, pt, 7, (0, 255, 255), -1)
+                    cv2.circle(frame, pt, 9, (255, 255, 255), 2)
+                    cv2.putText(frame, str(i+1), (pt[0]+12, pt[1]), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
                 
                 if len(self.polygon_points) > 1:
                     pts = np.array(self.polygon_points, np.int32)
-                    cv2.polylines(frame, [pts], self.polygon_complete, (0, 255, 255), 2)
+                    cv2.polylines(frame, [pts], self.polygon_complete, (0, 255, 255), 3)
                 
                 if self.polygon_complete:
                     overlay = frame.copy()
                     cv2.fillPoly(overlay, [pts], (0, 255, 255))
-                    frame = cv2.addWeighted(overlay, 0.2, frame, 0.8, 0)
+                    frame = cv2.addWeighted(overlay, 0.25, frame, 0.75, 0)
+                    
+                    # Show debug HSV if enabled
+                    if debug_mode:
+                        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+                        poly_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+                        cv2.fillPoly(poly_mask, [pts], 255)
+                        
+                        brown_mask = cv2.inRange(hsv, BROWN_LOWER, BROWN_UPPER)
+                        brown_mask = cv2.bitwise_and(brown_mask, poly_mask)
+                        
+                        white_mask = cv2.inRange(hsv, WHITE_LOWER, WHITE_UPPER)
+                        white_mask = cv2.bitwise_and(white_mask, poly_mask)
+                        
+                        cv2.imshow("Brown Detection", brown_mask)
+                        cv2.imshow("White Detection", white_mask)
 
             results = self.model.track(
                 frame, persist=True, classes=self.classes, conf=0.80)
@@ -391,27 +459,23 @@ class ObjectCounter:
                                     print(f"📦 IN Detected - ID:{tid} (Color will be detected after 0.4 seconds)")
                                     
                                 else:
-                                    # Use polygon-based color detection
-                                    if self.polygon_complete:
-                                        color_name = detect_box_color_in_polygon(frame, box, self.polygon_points)
-                                    else:
-                                        color_name = "Unknown"
+                                    # Detect color immediately for OUT
+                                    color_name = detect_box_color_in_polygon(frame, box, self.polygon_points if self.polygon_complete else None)
                                     
                                     self.out_count += 1
                                     self.color_out_count[color_name] = self.color_out_count.get(color_name, 0) + 1
+                                    self.color_at_crossing[tid] = color_name
                                     print(f"✅ OUT - ID:{tid} Color:{color_name}")
 
                                 self.counted.add(tid)
                     
+                    # Check if delayed detection is ready
                     if tid in self.pending_in_detections:
                         frames_since_crossing = self.frame_count - self.pending_in_detections[tid]
                         
                         if frames_since_crossing >= self.delay_frames:
-                            # Use polygon-based color detection
-                            if self.polygon_complete:
-                                color_name = detect_box_color_in_polygon(frame, box, self.polygon_points)
-                            else:
-                                color_name = "Unknown"
+                            # Detect color now
+                            color_name = detect_box_color_in_polygon(frame, box, self.polygon_points if self.polygon_complete else None)
                                 
                             self.color_in_count[color_name] = self.color_in_count.get(color_name, 0) + 1
                             self.color_at_crossing[tid] = color_name
@@ -421,18 +485,16 @@ class ObjectCounter:
 
                     self.hist[tid] = (cx, cy)
 
+                    # Display color
                     if tid in self.color_at_crossing:
                         display_color = self.color_at_crossing[tid]
                     elif tid in self.pending_in_detections:
                         display_color = "Pending..."
                     else:
-                        if self.polygon_complete:
-                            display_color = detect_box_color_in_polygon(frame, box, self.polygon_points)
-                        else:
-                            display_color = "Unknown"
+                        display_color = detect_box_color_in_polygon(frame, box, self.polygon_points if self.polygon_complete else None)
                     
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    cv2.putText(frame, f"{display_color}", (x1, y1 - 10),
+                    cv2.putText(frame, f"ID:{tid} {display_color}", (x1, y1 - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 200, 0), 2)
 
             if self.line_p1:
@@ -443,10 +505,14 @@ class ObjectCounter:
             cv2.rectangle(overlay, (0, 0), (1020, 180), (0, 0, 0), -1)
             frame = cv2.addWeighted(overlay, 0.35, frame, 0.65, 0)
 
-            # Mode indicator
+            # Mode and polygon status
             mode_color = (100, 200, 255) if self.drawing_mode == "line" else (255, 100, 255)
-            cv2.putText(frame, f"MODE: {self.drawing_mode.upper()}", (750, 32),
+            cv2.putText(frame, f"MODE: {self.drawing_mode.upper()}", (680, 32),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, mode_color, 2)
+            
+            if self.polygon_complete:
+                cv2.putText(frame, "POLYGON: ON", (850, 32),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
             # Title
             cv2.putText(frame, "TRACKING SYSTEM", (15, 32),
@@ -534,7 +600,13 @@ class ObjectCounter:
                 elif key == ord('c') or key == ord('C'):
                     self.polygon_points.clear()
                     self.polygon_complete = False
+                    if os.path.exists(self.polygon_file):
+                        os.remove(self.polygon_file)
                     print("🗑️ Polygon cleared")
+                
+                elif key == ord('d') or key == ord('D'):
+                    debug_mode = not debug_mode
+                    print(f"🔍 Debug mode: {'ON' if debug_mode else 'OFF'}")
 
                 elif key == ord('o') or key == ord('O'):
                     self.reset_all_data()
