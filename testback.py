@@ -17,19 +17,43 @@ BROWN_UPPER = np.array([20, 255, 255])
 WHITE_LOWER = np.array([0, 0, 200])
 WHITE_UPPER = np.array([180, 40, 255])
 
-def detect_box_color(frame, box):
+def detect_box_color_in_polygon(frame, box, polygon_points):
+    """Detect color only within the polygon area"""
+    if polygon_points is None or len(polygon_points) < 3:
+        return "Unknown"
+    
     x1, y1, x2, y2 = box
     roi = frame[y1:y2, x1:x2]
 
     if roi.size == 0:
         return "Unknown"
 
+    # Create mask for polygon
+    mask = np.zeros(roi.shape[:2], dtype=np.uint8)
+    
+    # Adjust polygon points to ROI coordinates
+    adjusted_points = []
+    for px, py in polygon_points:
+        new_x = px - x1
+        new_y = py - y1
+        if 0 <= new_x < roi.shape[1] and 0 <= new_y < roi.shape[0]:
+            adjusted_points.append([new_x, new_y])
+    
+    if len(adjusted_points) < 3:
+        return "Unknown"
+    
+    # Fill polygon area in mask
+    cv2.fillPoly(mask, [np.array(adjusted_points, dtype=np.int32)], 255)
+    
+    # Apply mask to ROI
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-
+    
     brown_mask = cv2.inRange(hsv, BROWN_LOWER, BROWN_UPPER)
+    brown_mask = cv2.bitwise_and(brown_mask, brown_mask, mask=mask)
     brown_intensity = brown_mask.mean()
 
     white_mask = cv2.inRange(hsv, WHITE_LOWER, WHITE_UPPER)
+    white_mask = cv2.bitwise_and(white_mask, white_mask, mask=mask)
     white_intensity = white_mask.mean()
 
     if brown_intensity > 20:
@@ -47,7 +71,8 @@ def detect_box_color(frame, box):
 class ObjectCounter:
     def __init__(self, source, model="best_float32.tflite",
                  classes_to_count=[0], show=True,
-                 json_file="line_coords.json"):
+                 json_file="line_coords.json",
+                 polygon_file="polygon_coords.json"):
 
         self.source = source
         self.model = YOLO(model)
@@ -64,6 +89,14 @@ class ObjectCounter:
             self.cap = cv2.VideoCapture(source)
             self.is_rtsp = False
 
+        # Get FPS for time calculation
+        if not self.is_rtsp:
+            self.fps = self.cap.get(cv2.CAP_PROP_FPS)
+            if self.fps == 0:
+                self.fps = 30
+        else:
+            self.fps = 30
+
         # -------- Session Data --------
         self.session_start_time = datetime.now()
         self.current_session_data = None
@@ -75,8 +108,11 @@ class ObjectCounter:
         self.crossed_ids = set()
         self.counted = set()
         
-        # ✅ Store color detected at crossing point
         self.color_at_crossing = {}
+
+        # Track IN crossings with timestamp for delayed color detection
+        self.pending_in_detections = {}
+        self.delay_frames = int(0.4 * self.fps)
 
         # -------- Counters --------
         self.in_count = 0
@@ -85,26 +121,25 @@ class ObjectCounter:
         self.color_in_count = {}
         self.color_out_count = {}
 
-        # ✅ MISSED LOGIC
+        # MISSED LOGIC
         self.missed_in = set()
         self.missed_out = set()
         self.missed_cross = set()
         self.max_missing_frames = 40
 
-        # -------- Counting Line --------
+        # -------- Line --------
         self.line_p1 = None
         self.line_p2 = None
-        
-        # -------- 🆕 Color Detection Line --------
-        self.color_line_p1 = None
-        self.color_line_p2 = None
-        
-        # -------- Mouse Drawing Control --------
         self.temp_points = []
-        self.drawing_mode = "counting"  # "counting" or "color"
-        
         self.json_file = json_file
-        self.load_lines()
+        self.load_line()
+
+        # -------- Polygon for Color Detection --------
+        self.polygon_points = []
+        self.polygon_complete = False
+        self.polygon_file = polygon_file
+        self.drawing_mode = "line"  # "line" or "polygon"
+        self.load_polygon()
 
         self.frame_count = 0
 
@@ -171,55 +206,58 @@ class ObjectCounter:
         
         print("=" * 80 + "\n")
 
-    # ---------------- Mouse ----------------
+    # ---------------- Mouse Event Handler ----------------
     def mouse_event(self, event, x, y, flags, param):
         if event == cv2.EVENT_LBUTTONDOWN:
-            self.temp_points.append((x, y))
-            if len(self.temp_points) == 2:
-                if self.drawing_mode == "counting":
+            if self.drawing_mode == "line":
+                # Line drawing mode (original functionality)
+                self.temp_points.append((x, y))
+                if len(self.temp_points) == 2:
                     self.line_p1, self.line_p2 = self.temp_points
-                    print("✅ Counting line set!")
-                elif self.drawing_mode == "color":
-                    self.color_line_p1, self.color_line_p2 = self.temp_points
-                    print("✅ Color detection line set!")
-                
-                self.temp_points = []
-                self.save_lines()
+                    self.temp_points = []
+                    self.save_line()
+                    print("✅ Counting line saved!")
+                    
+            elif self.drawing_mode == "polygon":
+                # Polygon drawing mode
+                self.polygon_points.append((x, y))
+                print(f"📍 Polygon point {len(self.polygon_points)} added: ({x}, {y})")
+        
+        elif event == cv2.EVENT_RBUTTONDOWN:
+            # Right click to complete polygon
+            if self.drawing_mode == "polygon" and len(self.polygon_points) >= 3:
+                self.polygon_complete = True
+                self.save_polygon()
+                print(f"✅ Polygon completed with {len(self.polygon_points)} points!")
 
-    # ---------------- Save / Load Lines ----------------
-    def save_lines(self):
+    # ---------------- Save / Load Line ----------------
+    def save_line(self):
         with open(self.json_file, "w") as f:
-            json.dump({
-                "line_p1": self.line_p1, 
-                "line_p2": self.line_p2,
-                "color_line_p1": self.color_line_p1,
-                "color_line_p2": self.color_line_p2
-            }, f)
+            json.dump({"line_p1": self.line_p1, "line_p2": self.line_p2}, f)
 
-    def load_lines(self):
+    def load_line(self):
         if os.path.exists(self.json_file):
             with open(self.json_file) as f:
                 data = json.load(f)
-                self.line_p1 = tuple(data["line_p1"]) if data.get("line_p1") else None
-                self.line_p2 = tuple(data["line_p2"]) if data.get("line_p2") else None
-                self.color_line_p1 = tuple(data["color_line_p1"]) if data.get("color_line_p1") else None
-                self.color_line_p2 = tuple(data["color_line_p2"]) if data.get("color_line_p2") else None
+                self.line_p1 = tuple(data["line_p1"])
+                self.line_p2 = tuple(data["line_p2"])
+
+    # ---------------- Save / Load Polygon ----------------
+    def save_polygon(self):
+        with open(self.polygon_file, "w") as f:
+            json.dump({"polygon_points": self.polygon_points}, f)
+
+    def load_polygon(self):
+        if os.path.exists(self.polygon_file):
+            with open(self.polygon_file) as f:
+                data = json.load(f)
+                self.polygon_points = [tuple(pt) for pt in data["polygon_points"]]
+                if len(self.polygon_points) >= 3:
+                    self.polygon_complete = True
 
     # ---------------- Utility ----------------
     def side(self, px, py, x1, y1, x2, y2):
         return (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
-
-    # 🆕 Check if object crossed color detection line
-    def crossed_color_line(self, tid, cx, cy):
-        """Check if object has crossed the color detection line"""
-        if not self.color_line_p1 or tid not in self.hist:
-            return False
-        
-        px, py = self.hist[tid]
-        s1 = self.side(px, py, *self.color_line_p1, *self.color_line_p2)
-        s2 = self.side(cx, cy, *self.color_line_p1, *self.color_line_p2)
-        
-        return s1 * s2 < 0  # Different signs = crossed
 
     # ================= MISSED TRACK HANDLER =================
     def check_lost_ids(self):
@@ -236,9 +274,9 @@ class ObjectCounter:
 
             elif tid not in self.counted and tid in self.hist:
                 cx, cy = self.hist[tid]
-                s = self.side(cx, cy, *self.line_p2, *self.line_p1)
+                s = self.side(cx, cy, *self.line_p1, *self.line_p2)
 
-                if s < 0:
+                if s > 0:
                     self.missed_in.add(tid)
                 else:
                     self.missed_out.add(tid)
@@ -246,6 +284,7 @@ class ObjectCounter:
             self.hist.pop(tid, None)
             self.last_seen.pop(tid, None)
             self.color_at_crossing.pop(tid, None)
+            self.pending_in_detections.pop(tid, None)
 
     # ---------------- Reset Function ----------------
     def reset_all_data(self):
@@ -263,6 +302,7 @@ class ObjectCounter:
         self.missed_in.clear()
         self.missed_out.clear()
         self.missed_cross.clear()
+        self.pending_in_detections.clear()
         self.in_count = 0
         self.out_count = 0
         
@@ -271,13 +311,18 @@ class ObjectCounter:
 
     # ---------------- Main Loop ----------------
     def run(self):
-        print("\n" + "="*60)
+        print("=" * 80)
         print("CONTROLS:")
-        print("  C = Set Counting Line (2 clicks)")
-        print("  D = Set Color Detection Line (2 clicks)")
-        print("  O = Reset & Show Summary")
-        print("  ESC = Exit")
-        print("="*60 + "\n")
+        print("  Press 'L' - Switch to LINE drawing mode (for counting line)")
+        print("  Press 'P' - Switch to POLYGON drawing mode (for color detection area)")
+        print("  Left Click - Add point (line or polygon)")
+        print("  Right Click - Complete polygon (when in polygon mode)")
+        print("  Press 'O' - Reset & Show Summary")
+        print("  Press 'C' - Clear polygon")
+        print("  ESC - Exit")
+        print("=" * 80)
+        print(f"FPS: {self.fps}, Delay frames for 0.4 seconds: {self.delay_frames}")
+        print(f"Current mode: {self.drawing_mode.upper()}")
 
         while True:
             if self.is_rtsp:
@@ -297,25 +342,25 @@ class ObjectCounter:
             for pt in self.temp_points:
                 cv2.circle(frame, pt, 5, (0, 0, 255), -1)
 
-            # Draw counting line (WHITE)
+            # Draw counting line
             if self.line_p1:
-                cv2.line(frame, self.line_p1, self.line_p2, (255, 255, 255), 3)
-                cv2.putText(frame, "COUNT", 
-                           (self.line_p1[0] + 10, self.line_p1[1] - 10),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                cv2.line(frame, self.line_p1, self.line_p2, (255, 255, 255), 2)
 
-            # 🆕 Draw color detection line (CYAN)
-            if self.color_line_p1:
-                cv2.line(frame, self.color_line_p1, self.color_line_p2, (255, 255, 0), 3)
-                cv2.putText(frame, "COLOR", 
-                           (self.color_line_p1[0] + 10, self.color_line_p1[1] - 10),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-
-            # Show current drawing mode
-            mode_text = f"Mode: {self.drawing_mode.upper()}"
-            mode_color = (255, 255, 255) if self.drawing_mode == "counting" else (255, 255, 0)
-            cv2.putText(frame, mode_text, (850, 30),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, mode_color, 2)
+            # Draw polygon
+            if len(self.polygon_points) > 0:
+                for i, pt in enumerate(self.polygon_points):
+                    cv2.circle(frame, pt, 5, (0, 255, 255), -1)
+                    cv2.putText(frame, str(i+1), (pt[0]+10, pt[1]), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+                
+                if len(self.polygon_points) > 1:
+                    pts = np.array(self.polygon_points, np.int32)
+                    cv2.polylines(frame, [pts], self.polygon_complete, (0, 255, 255), 2)
+                
+                if self.polygon_complete:
+                    overlay = frame.copy()
+                    cv2.fillPoly(overlay, [pts], (0, 255, 255))
+                    frame = cv2.addWeighted(overlay, 0.2, frame, 0.8, 0)
 
             results = self.model.track(
                 frame, persist=True, classes=self.classes, conf=0.80)
@@ -331,44 +376,60 @@ class ObjectCounter:
 
                     self.last_seen[tid] = self.frame_count
 
-                    # 🆕 Detect color when crossing color line
-                    if self.color_line_p1 and self.crossed_color_line(tid, cx, cy):
-                        color_name = detect_box_color(frame, box)
-                        self.color_at_crossing[tid] = color_name
-                        print(f"🎨 ID:{tid} Color detected at color line: {color_name}")
-
                     if tid in self.hist:
                         px, py = self.hist[tid]
                         s1 = self.side(px, py, *self.line_p1, *self.line_p2)
                         s2 = self.side(cx, cy, *self.line_p1, *self.line_p2)
 
-                        # Check counting line crossing
                         if s1 * s2 < 0:
                             self.crossed_ids.add(tid)
 
                             if tid not in self.counted:
-                                # Get stored color or detect new
-                                if tid in self.color_at_crossing:
-                                    color_name = self.color_at_crossing[tid]
-                                else:
-                                    color_name = detect_box_color(frame, box)
-                                
-                                if s2 > 0:  # Going IN
+                                if s2 > 0:
+                                    self.pending_in_detections[tid] = self.frame_count
                                     self.in_count += 1
-                                    self.color_in_count[color_name] = self.color_in_count.get(color_name, 0) + 1
-                                    print(f"✅ IN - ID:{tid} Color:{color_name}")
+                                    print(f"📦 IN Detected - ID:{tid} (Color will be detected after 0.4 seconds)")
                                     
-                                else:  # Going OUT
+                                else:
+                                    # Use polygon-based color detection
+                                    if self.polygon_complete:
+                                        color_name = detect_box_color_in_polygon(frame, box, self.polygon_points)
+                                    else:
+                                        color_name = "Unknown"
+                                    
                                     self.out_count += 1
                                     self.color_out_count[color_name] = self.color_out_count.get(color_name, 0) + 1
                                     print(f"✅ OUT - ID:{tid} Color:{color_name}")
 
                                 self.counted.add(tid)
+                    
+                    if tid in self.pending_in_detections:
+                        frames_since_crossing = self.frame_count - self.pending_in_detections[tid]
+                        
+                        if frames_since_crossing >= self.delay_frames:
+                            # Use polygon-based color detection
+                            if self.polygon_complete:
+                                color_name = detect_box_color_in_polygon(frame, box, self.polygon_points)
+                            else:
+                                color_name = "Unknown"
+                                
+                            self.color_in_count[color_name] = self.color_in_count.get(color_name, 0) + 1
+                            self.color_at_crossing[tid] = color_name
+                            print(f"✅ IN Color Detected - ID:{tid} Color:{color_name} (after 0.4 seconds)")
+                            
+                            del self.pending_in_detections[tid]
 
                     self.hist[tid] = (cx, cy)
 
-                    # Display color
-                    display_color = self.color_at_crossing.get(tid, "Unknown")
+                    if tid in self.color_at_crossing:
+                        display_color = self.color_at_crossing[tid]
+                    elif tid in self.pending_in_detections:
+                        display_color = "Pending..."
+                    else:
+                        if self.polygon_complete:
+                            display_color = detect_box_color_in_polygon(frame, box, self.polygon_points)
+                        else:
+                            display_color = "Unknown"
                     
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                     cv2.putText(frame, f"{display_color}", (x1, y1 - 10),
@@ -377,29 +438,34 @@ class ObjectCounter:
             if self.line_p1:
                 self.check_lost_ids()
 
-            # ================= DISPLAY =================
+            # Enhanced Display
             overlay = frame.copy()
-            cv2.rectangle(overlay, (0, 0), (1020, 160), (0, 0, 0), -1)
+            cv2.rectangle(overlay, (0, 0), (1020, 180), (0, 0, 0), -1)
             frame = cv2.addWeighted(overlay, 0.35, frame, 0.65, 0)
 
+            # Mode indicator
+            mode_color = (100, 200, 255) if self.drawing_mode == "line" else (255, 100, 255)
+            cv2.putText(frame, f"MODE: {self.drawing_mode.upper()}", (750, 32),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, mode_color, 2)
+
+            # Title
             cv2.putText(frame, "TRACKING SYSTEM", (15, 32),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (100, 200, 255), 3)
             cv2.circle(frame, (250, 24), 7, (0, 255, 0), -1)
 
+            # Total counts
             y_row1 = 65
-            font_large = 0.8
-            thickness_bold = 3
-            
             cv2.putText(frame, "IN:", (15, y_row1),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (0, 255, 150), thickness_bold)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 150), 3)
             cv2.putText(frame, str(self.in_count), (75, y_row1),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 3)
 
             cv2.putText(frame, "OUT:", (150, y_row1),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (100, 180, 255), thickness_bold)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (100, 180, 255), 3)
             cv2.putText(frame, str(self.out_count), (230, y_row1),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 3)
 
+            # Missed counts
             cv2.putText(frame, "MISS IN:", (320, y_row1),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.55, (100, 255, 255), 2)
             cv2.putText(frame, str(len(self.missed_in)), (430, y_row1),
@@ -417,6 +483,7 @@ class ObjectCounter:
 
             cv2.line(frame, (10, 85), (1010, 85), (100, 100, 100), 2)
 
+            # Brown counts
             y_row2 = 118
             brown_in = self.color_in_count.get("Brown", 0)
             brown_out = self.color_out_count.get("Brown", 0)
@@ -425,15 +492,16 @@ class ObjectCounter:
             cv2.rectangle(frame, (15, y_row2 - 25), (50, y_row2 - 5), (255, 255, 255), 2)
             
             cv2.putText(frame, "BROWN IN:", (60, y_row2),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (100, 150, 255), thickness_bold)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (100, 150, 255), 3)
             cv2.putText(frame, str(brown_in), (240, y_row2),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 3)
 
             cv2.putText(frame, "BROWN OUT:", (350, y_row2),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (100, 150, 255), thickness_bold)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (100, 150, 255), 3)
             cv2.putText(frame, str(brown_out), (570, y_row2),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 3)
 
+            # White counts
             y_row3 = 150
             white_in = self.color_in_count.get("White", 0)
             white_out = self.color_out_count.get("White", 0)
@@ -442,28 +510,31 @@ class ObjectCounter:
             cv2.rectangle(frame, (15, y_row3 - 25), (50, y_row3 - 5), (100, 100, 100), 2)
             
             cv2.putText(frame, "WHITE IN:", (60, y_row3),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (200, 255, 200), thickness_bold)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 255, 200), 3)
             cv2.putText(frame, str(white_in), (240, y_row3),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 3)
 
             cv2.putText(frame, "WHITE OUT:", (350, y_row3),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (200, 255, 200), thickness_bold)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 255, 200), 3)
             cv2.putText(frame, str(white_out), (570, y_row3),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 3)
 
             if self.show:
                 cv2.imshow("ObjectCounter", frame)
                 key = cv2.waitKey(1) & 0xFF
 
-                if key == ord('c') or key == ord('C'):
-                    self.drawing_mode = "counting"
-                    self.temp_points = []
-                    print("📏 Counting line mode - Click 2 points")
-
-                elif key == ord('d') or key == ord('D'):
-                    self.drawing_mode = "color"
-                    self.temp_points = []
-                    print("🎨 Color detection line mode - Click 2 points")
+                if key == ord('l') or key == ord('L'):
+                    self.drawing_mode = "line"
+                    print("🔄 Switched to LINE mode")
+                
+                elif key == ord('p') or key == ord('P'):
+                    self.drawing_mode = "polygon"
+                    print("🔄 Switched to POLYGON mode")
+                
+                elif key == ord('c') or key == ord('C'):
+                    self.polygon_points.clear()
+                    self.polygon_complete = False
+                    print("🗑️ Polygon cleared")
 
                 elif key == ord('o') or key == ord('O'):
                     self.reset_all_data()
