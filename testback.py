@@ -75,6 +75,8 @@ class ObjectCounter:
         self.last_seen = {}
         self.crossed_ids = set()
         self.counted = set()
+        self.counted_in = set()  # ✅ Track which IDs have been counted for IN
+        self.counted_out = set()  # ✅ Track which IDs have been counted for OUT
         
         # ✅ Store color detected at crossing point
         self.color_at_crossing = {}
@@ -238,6 +240,8 @@ class ObjectCounter:
         self.last_seen.clear()
         self.crossed_ids.clear()
         self.counted.clear()
+        self.counted_in.clear()
+        self.counted_out.clear()
         self.color_at_crossing.clear()
         self.pending_in_detection.clear()
         self.color_in_count.clear()
@@ -336,26 +340,29 @@ class ObjectCounter:
                         if s1 * s2 < 0:  # Crossed the line
                             self.crossed_ids.add(tid)
 
-                            if tid not in self.counted:
-                                # Determine direction
-                                if s2 > 0:  # Going IN (positive side)
+                            # Determine direction
+                            if s2 > 0:  # Going IN (positive side)
+                                if tid not in self.counted_in:
                                     # Increment IN count immediately
                                     self.in_count += 1
+                                    self.counted_in.add(tid)
                                     print(f"✅ IN Count - ID:{tid} (count increased immediately)")
                                     
                                     # Schedule color detection AFTER 4 seconds
                                     self.pending_in_detection[tid] = self.frame_count
                                     print(f"⏳ IN Color - ID:{tid} Waiting 4 sec for color detection...")
                                     
-                                else:  # Going OUT (negative side)
+                            else:  # Going OUT (negative side)
+                                if tid not in self.counted_out:
                                     # For OUT: Detect color immediately
                                     color_name = detect_box_color(frame, box)
                                     
                                     self.out_count += 1
+                                    self.counted_out.add(tid)
                                     self.color_out_count[color_name] = self.color_out_count.get(color_name, 0) + 1
                                     print(f"✅ OUT - ID:{tid} Color:{color_name} (detected immediately)")
 
-                                self.counted.add(tid)
+                            self.counted.add(tid)
 
                     self.hist[tid] = (cx, cy)
 
