@@ -205,7 +205,7 @@ class ObjectCounter:
                 cx, cy = self.hist[tid]
                 s = self.side(cx, cy, *self.line_p1, *self.line_p2)
 
-                if s < 0:
+                if s > 0:
                     self.missed_in.add(tid)
                 else:
                     self.missed_out.add(tid)
