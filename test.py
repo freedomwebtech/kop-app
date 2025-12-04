@@ -47,7 +47,7 @@ def detect_box_color(frame, box):
 class ObjectCounter:
     def __init__(self, source, model="best_float32.tflite",
                  classes_to_count=[0], show=True,
-                 json_file="line_coords.json"):
+                 json_file="line_coords1.json"):
 
         self.source = source
         self.model = YOLO(model)
