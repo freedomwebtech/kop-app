@@ -359,8 +359,9 @@ class ObjectCounter:
                 cv2.line(frame, self.line_p1, self.line_p2,
                          (255, 255, 255), 2)
 
+            # ✅ CHANGED: Confidence level from 0.7 to 0.80
             results = self.model.track(
-                frame, persist=True, classes=self.classes, conf=0.7)
+                frame, persist=True, classes=self.classes, conf=0.80)
 
             if results[0].boxes.id is not None and self.line_p1:
                 ids = results[0].boxes.id.cpu().numpy().astype(int)
