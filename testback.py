@@ -47,14 +47,13 @@ def detect_box_color(frame, box):
 class ObjectCounter:
     def __init__(self, source, model="best_float32.tflite",
                  classes_to_count=[0], show=True,
-                 json_file="line_coords.json", conf=0.80):
+                 json_file="line_coords.json"):
 
         self.source = source
         self.model = YOLO(model)
         self.names = self.model.names
         self.classes = classes_to_count
         self.show = show
-        self.conf = conf
 
         # -------- RTSP or File --------
         if isinstance(source, str) and source.startswith("rtsp://"):
@@ -64,6 +63,14 @@ class ObjectCounter:
         else:
             self.cap = cv2.VideoCapture(source)
             self.is_rtsp = False
+
+        # Get FPS for time calculation
+        if not self.is_rtsp:
+            self.fps = self.cap.get(cv2.CAP_PROP_FPS)
+            if self.fps == 0:
+                self.fps = 30  # Default fallback
+        else:
+            self.fps = 30  # Default for RTSP
 
         # -------- Session Data --------
         self.session_start_time = datetime.now()
@@ -75,14 +82,13 @@ class ObjectCounter:
         self.last_seen = {}
         self.crossed_ids = set()
         self.counted = set()
-        self.counted_in = set()  # ✅ Track which IDs have been counted for IN
-        self.counted_out = set()  # ✅ Track which IDs have been counted for OUT
         
         # ✅ Store color detected at crossing point
         self.color_at_crossing = {}
-        
-        # ✅ NEW: Store objects waiting for color detection after crossing IN
-        self.pending_in_detection = {}  # {tid: frame_number_when_crossed}
+
+        # ✅ NEW: Track IN crossings with timestamp for delayed color detection
+        self.pending_in_detections = {}  # {track_id: frame_number_when_crossed}
+        self.delay_frames = int(4 * self.fps)  # 4 seconds worth of frames
 
         # -------- Counters --------
         self.in_count = 0
@@ -96,11 +102,6 @@ class ObjectCounter:
         self.missed_out = set()
         self.missed_cross = set()
         self.max_missing_frames = 40
-        
-        # ✅ NEW: Delay for IN color detection (4 seconds)
-        # Assuming ~30 FPS and processing every 3rd frame = ~10 processed frames per second
-        # 4 seconds × 10 = 40 frames
-        self.in_detection_delay = 40  # frames to wait after crossing (4 seconds)
 
         # -------- Line --------
         self.line_p1 = None
@@ -224,7 +225,7 @@ class ObjectCounter:
             self.hist.pop(tid, None)
             self.last_seen.pop(tid, None)
             self.color_at_crossing.pop(tid, None)
-            self.pending_in_detection.pop(tid, None)
+            self.pending_in_detections.pop(tid, None)  # Clean up pending detections
 
     # ---------------- Reset Function ----------------
     def reset_all_data(self):
@@ -240,15 +241,13 @@ class ObjectCounter:
         self.last_seen.clear()
         self.crossed_ids.clear()
         self.counted.clear()
-        self.counted_in.clear()
-        self.counted_out.clear()
         self.color_at_crossing.clear()
-        self.pending_in_detection.clear()
         self.color_in_count.clear()
         self.color_out_count.clear()
         self.missed_in.clear()
         self.missed_out.clear()
         self.missed_cross.clear()
+        self.pending_in_detections.clear()
         self.in_count = 0
         self.out_count = 0
         
@@ -258,7 +257,8 @@ class ObjectCounter:
 
     # ---------------- Main Loop ----------------
     def run(self):
-        print(f"RUNNING... Conf: {self.conf} | IN Color Delay: 4 sec | Press O to Reset | ESC to Exit")
+        print("RUNNING... Press O to Reset & Show Summary | ESC to Exit")
+        print(f"FPS: {self.fps}, Delay frames for 4 seconds: {self.delay_frames}")
 
         while True:
             if self.is_rtsp:
@@ -282,48 +282,12 @@ class ObjectCounter:
                          (255, 255, 255), 2)
 
             results = self.model.track(
-                frame, persist=True, classes=self.classes, conf=self.conf)
+                frame, persist=True, classes=self.classes, conf=0.80)
 
             if results[0].boxes.id is not None and self.line_p1:
                 ids = results[0].boxes.id.cpu().numpy().astype(int)
                 boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
 
-                # ✅ FIRST PASS: Check pending IN detections (after 15 second delay)
-                for tid in list(self.pending_in_detection.keys()):
-                    if tid in ids:
-                        crossed_frame = self.pending_in_detection[tid]
-                        frames_since_cross = self.frame_count - crossed_frame
-                        
-                        # If 4 seconds has passed since crossing
-                        if frames_since_cross >= self.in_detection_delay:
-                            # Find the box for this track id
-                            tid_idx = list(ids).index(tid)
-                            box = boxes[tid_idx]
-                            
-                            # Detect color NOW (after 4 second delay)
-                            color_name = detect_box_color(frame, box)
-                            
-                            self.in_count += 1
-                            self.color_in_count[color_name] = self.color_in_count.get(color_name, 0) + 1
-                            print(f"✅ IN - ID:{tid} Color:{color_name} (detected 4 sec after crossing)")
-                            
-                            # Mark as counted and remove from pending
-                            self.counted.add(tid)
-                            self.pending_in_detection.pop(tid)
-                    else:
-                        # Object disappeared before 4 seconds passed
-                        crossed_frame = self.pending_in_detection[tid]
-                        frames_since_cross = self.frame_count - crossed_frame
-                        
-                        # If object is lost and color wasn't detected yet
-                        if frames_since_cross < self.in_detection_delay:
-                            # Check if it's been missing for too long
-                            if tid in self.last_seen:
-                                if self.frame_count - self.last_seen[tid] > self.max_missing_frames:
-                                    print(f"⚠️ IN Color Detection - ID:{tid} Lost before 4 sec delay (color not detected)")
-                                    self.pending_in_detection.pop(tid)
-
-                # ✅ SECOND PASS: Process all tracked objects
                 for tid, box in zip(ids, boxes):
                     x1, y1, x2, y2 = box
                     cx = int((x1 + x2) / 2)
@@ -336,52 +300,55 @@ class ObjectCounter:
                         s1 = self.side(px, py, *self.line_p1, *self.line_p2)
                         s2 = self.side(cx, cy, *self.line_p1, *self.line_p2)
 
-                        # ✅ Line crossing detection
+                        # Check if object crossed the line
                         if s1 * s2 < 0:  # Crossed the line
                             self.crossed_ids.add(tid)
 
-                            # Determine direction
-                            if s2 > 0:  # Going IN (positive side)
-                                if tid not in self.counted_in:
-                                    # Increment IN count immediately
+                            if tid not in self.counted:
+                                # Determine direction
+                                if s2 > 0:  # Going IN (positive side)
+                                    # ✅ Schedule color detection for 4 seconds later
+                                    self.pending_in_detections[tid] = self.frame_count
                                     self.in_count += 1
-                                    self.counted_in.add(tid)
-                                    print(f"✅ IN Count - ID:{tid} (count increased immediately)")
+                                    print(f"📦 IN Detected - ID:{tid} (Color will be detected after 4 seconds)")
                                     
-                                    # Schedule color detection AFTER 4 seconds
-                                    self.pending_in_detection[tid] = self.frame_count
-                                    print(f"⏳ IN Color - ID:{tid} Waiting 4 sec for color detection...")
-                                    
-                            else:  # Going OUT (negative side)
-                                if tid not in self.counted_out:
+                                else:  # Going OUT (negative side)
                                     # For OUT: Detect color immediately
                                     color_name = detect_box_color(frame, box)
                                     
                                     self.out_count += 1
-                                    self.counted_out.add(tid)
                                     self.color_out_count[color_name] = self.color_out_count.get(color_name, 0) + 1
-                                    print(f"✅ OUT - ID:{tid} Color:{color_name} (detected immediately)")
+                                    print(f"✅ OUT - ID:{tid} Color:{color_name}")
 
-                            self.counted.add(tid)
+                                self.counted.add(tid)
+                    
+                    # ✅ Check if it's time to detect color for pending IN detections
+                    if tid in self.pending_in_detections:
+                        frames_since_crossing = self.frame_count - self.pending_in_detections[tid]
+                        
+                        if frames_since_crossing >= self.delay_frames:
+                            # Detect color now (4 seconds have passed)
+                            color_name = detect_box_color(frame, box)
+                            self.color_in_count[color_name] = self.color_in_count.get(color_name, 0) + 1
+                            self.color_at_crossing[tid] = color_name
+                            print(f"✅ IN Color Detected - ID:{tid} Color:{color_name} (after 4 seconds)")
+                            
+                            # Remove from pending
+                            del self.pending_in_detections[tid]
 
                     self.hist[tid] = (cx, cy)
 
-                    # Display: Show "Waiting..." for objects pending IN detection
-                    if tid in self.pending_in_detection and tid not in self.counted:
-                        crossed_frame = self.pending_in_detection[tid]
-                        frames_elapsed = self.frame_count - crossed_frame
-                        seconds_elapsed = frames_elapsed / 10  # ~10 processed frames per second
-                        seconds_remaining = 4 - seconds_elapsed
-                        
-                        display_text = f"Waiting... {int(seconds_remaining)}s"
-                        text_color = (0, 255, 255)  # Cyan for waiting
+                    # Display current detected color (if available)
+                    if tid in self.color_at_crossing:
+                        display_color = self.color_at_crossing[tid]
+                    elif tid in self.pending_in_detections:
+                        display_color = "Pending..."
                     else:
-                        display_text = detect_box_color(frame, box)
-                        text_color = (255, 200, 0)  # Orange for regular display
+                        display_color = detect_box_color(frame, box)
                     
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    cv2.putText(frame, display_text, (x1, y1 - 10),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, text_color, 2)
+                    cv2.putText(frame, f"{display_color}", (x1, y1 - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 200, 0), 2)
 
             # ✅ MISSED CHECK ACTIVE
             if self.line_p1:
@@ -503,7 +470,6 @@ if __name__ == "__main__":
         source="your_video.mp4",  # or 0 for webcam, or "rtsp://..."
         model="best_float32.tflite",
         classes_to_count=[0],
-        show=True,
-        conf=0.80
+        show=True
     )
     counter.run()
