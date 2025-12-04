@@ -149,18 +149,18 @@ class ObjectCounter:
                 lost.append(tid)
 
         for tid in lost:
-            # If object crossed the line but wasn't counted
-            if tid in self.crossed_ids and tid not in self.counted:
-                self.missed_cross.add(tid)
-
-            # If object was detected but never crossed the line
-            elif tid not in self.crossed_ids and tid not in self.false_detections:
+            # If object was detected but never crossed the line - mark as FALSE
+            if tid not in self.crossed_ids and tid not in self.false_detections:
                 self.false_detections.add(tid)
                 self.false_count += 1
                 print(f"❌ FALSE - ID:{tid} (detected but didn't cross)")
 
-            # If object was in history but not counted
-            elif tid not in self.counted and tid in self.hist:
+            # If object crossed the line but wasn't counted
+            elif tid in self.crossed_ids and tid not in self.counted:
+                self.missed_cross.add(tid)
+
+            # If object was in history, crossed line, but not counted - check side for missed IN/OUT
+            elif tid not in self.counted and tid in self.hist and tid in self.crossed_ids:
                 cx, cy = self.hist[tid]
                 s = self.side(cx, cy, *self.line_p1, *self.line_p2)
 
