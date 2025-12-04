@@ -311,13 +311,12 @@ class ObjectCounter:
                         crossed_frame = self.pending_in_detection[tid]
                         frames_since_cross = self.frame_count - crossed_frame
                         
-                        # If object is lost and hasn't been counted
+                        # If object is lost and color wasn't detected yet
                         if frames_since_cross < self.in_detection_delay:
                             # Check if it's been missing for too long
                             if tid in self.last_seen:
                                 if self.frame_count - self.last_seen[tid] > self.max_missing_frames:
-                                    print(f"⚠️ IN - ID:{tid} Lost before 4 sec delay (marked as missed)")
-                                    self.missed_in.add(tid)
+                                    print(f"⚠️ IN Color Detection - ID:{tid} Lost before 4 sec delay (color not detected)")
                                     self.pending_in_detection.pop(tid)
 
                 # ✅ SECOND PASS: Process all tracked objects
@@ -340,19 +339,23 @@ class ObjectCounter:
                             if tid not in self.counted:
                                 # Determine direction
                                 if s2 > 0:  # Going IN (positive side)
-                                    # For IN: Schedule color detection AFTER 4 seconds
+                                    # Increment IN count immediately
+                                    self.in_count += 1
+                                    print(f"✅ IN Count - ID:{tid} (count increased immediately)")
+                                    
+                                    # Schedule color detection AFTER 4 seconds
                                     self.pending_in_detection[tid] = self.frame_count
-                                    print(f"⏳ IN - ID:{tid} Crossed line, waiting 4 sec for color detection...")
+                                    print(f"⏳ IN Color - ID:{tid} Waiting 4 sec for color detection...")
                                     
                                 else:  # Going OUT (negative side)
-                                    # For OUT: Detect color immediately at current position
+                                    # For OUT: Detect color immediately
                                     color_name = detect_box_color(frame, box)
                                     
                                     self.out_count += 1
                                     self.color_out_count[color_name] = self.color_out_count.get(color_name, 0) + 1
                                     print(f"✅ OUT - ID:{tid} Color:{color_name} (detected immediately)")
-                                    
-                                    self.counted.add(tid)
+
+                                self.counted.add(tid)
 
                     self.hist[tid] = (cx, cy)
 
