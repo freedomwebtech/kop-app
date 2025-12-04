@@ -41,8 +41,12 @@ class ObjectCounter:
         self.last_seen = {}
         self.crossed_ids = set()
         self.counted = set()
-        self.false_detections = set()  # Track IDs that didn't cross
-        self.direction_tracking = {}  # Track which direction object should go
+        self.false_detections = set()
+        
+        # -------- NEW: Enhanced Miss Tracking --------
+        self.crossed_direction = {}  # Which direction object crossed: "IN" or "OUT"
+        self.completion_zone = {}    # Track if object reached completion zone
+        self.miss_tracked = set()    # IDs already counted as miss
 
         # -------- Counters --------
         self.in_count = 0
@@ -53,6 +57,7 @@ class ObjectCounter:
 
         # -------- MISSED LOGIC --------
         self.max_missing_frames = 40
+        self.completion_distance = 80  # Distance from line to consider "completed"
 
         # -------- Line --------
         self.line_p1 = None
@@ -132,8 +137,36 @@ class ObjectCounter:
     def side(self, px, py, x1, y1, x2, y2):
         return (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
 
-    # ---------------- MISSED TRACK HANDLER ----------------
+    def distance_from_line(self, px, py):
+        """Calculate perpendicular distance from point to line"""
+        if not self.line_p1 or not self.line_p2:
+            return 0
+        
+        x1, y1 = self.line_p1
+        x2, y2 = self.line_p2
+        
+        # Line equation: Ax + By + C = 0
+        A = y2 - y1
+        B = x1 - x2
+        C = x2 * y1 - x1 * y2
+        
+        # Distance formula
+        distance = abs(A * px + B * py + C) / np.sqrt(A**2 + B**2)
+        return distance
+
+    # ---------------- ENHANCED MISS TRACKING ----------------
+    def check_completion_status(self, tid, cx, cy):
+        """Check if object has moved far enough from line to be considered complete"""
+        distance = self.distance_from_line(cx, cy)
+        
+        if tid in self.crossed_direction and tid not in self.completion_zone:
+            if distance > self.completion_distance:
+                self.completion_zone[tid] = True
+                return True
+        return False
+
     def check_lost_ids(self):
+        """Enhanced lost ID checking with miss tracking"""
         current = self.frame_count
         lost = []
 
@@ -142,27 +175,35 @@ class ObjectCounter:
                 lost.append(tid)
 
         for tid in lost:
-            # If object crossed the line but was not counted
-            if tid in self.crossed_ids and tid not in self.counted:
-                # Check which direction it was supposed to go
-                if tid in self.direction_tracking:
-                    expected_direction = self.direction_tracking[tid]
-                    if expected_direction == "IN":
+            # Check if object crossed line but disappeared before counting
+            if tid in self.crossed_direction and tid not in self.counted and tid not in self.miss_tracked:
+                direction = self.crossed_direction[tid]
+                
+                # Check if it reached completion zone
+                completed = tid in self.completion_zone
+                
+                if not completed:
+                    # Object crossed but didn't complete the movement
+                    if direction == "IN":
                         self.miss_in_count += 1
-                        print(f"⚠️ MISS IN - ID:{tid} (crossed but not counted as IN)")
+                        print(f"⚠️ MISS IN - ID:{tid} (crossed line going IN but didn't complete)")
                     else:  # OUT
                         self.miss_out_count += 1
-                        print(f"⚠️ MISS OUT - ID:{tid} (crossed but not counted as OUT)")
+                        print(f"⚠️ MISS OUT - ID:{tid} (crossed line going OUT but didn't complete)")
+                    
+                    self.miss_tracked.add(tid)
 
             # If object was detected but never crossed the line - mark as FALSE
-            elif tid not in self.crossed_ids and tid not in self.false_detections:
+            elif tid not in self.crossed_direction and tid not in self.false_detections:
                 self.false_detections.add(tid)
                 self.false_count += 1
-                print(f"❌ FALSE - ID:{tid} (detected but didn't cross)")
+                print(f"❌ FALSE - ID:{tid} (detected but didn't cross line)")
 
+            # Clean up tracking data
             self.hist.pop(tid, None)
             self.last_seen.pop(tid, None)
-            self.direction_tracking.pop(tid, None)
+            self.crossed_direction.pop(tid, None)
+            self.completion_zone.pop(tid, None)
 
     # ---------------- Reset Function ----------------
     def reset_all_data(self):
@@ -179,7 +220,9 @@ class ObjectCounter:
         self.crossed_ids.clear()
         self.counted.clear()
         self.false_detections.clear()
-        self.direction_tracking.clear()
+        self.crossed_direction.clear()
+        self.completion_zone.clear()
+        self.miss_tracked.clear()
         self.in_count = 0
         self.out_count = 0
         self.false_count = 0
@@ -213,8 +256,7 @@ class ObjectCounter:
 
             # Draw main counting line (white)
             if self.line_p1:
-                cv2.line(frame, self.line_p1, self.line_p2,
-                         (255, 255, 255), 3)
+                cv2.line(frame, self.line_p1, self.line_p2, (255, 255, 255), 3)
 
             results = self.model.track(
                 frame, persist=True, classes=self.classes, conf=0.80)
@@ -230,35 +272,54 @@ class ObjectCounter:
 
                     self.last_seen[tid] = self.frame_count
 
+                    # Check completion status
+                    self.check_completion_status(tid, cx, cy)
+
                     if tid in self.hist:
                         px, py = self.hist[tid]
                         s1 = self.side(px, py, *self.line_p1, *self.line_p2)
                         s2 = self.side(cx, cy, *self.line_p1, *self.line_p2)
 
-                        if s1 * s2 < 0:  # Crossed the line
+                        # Detect line crossing
+                        if s1 * s2 < 0:
                             self.crossed_ids.add(tid)
-
-                            # Track expected direction
+                            
+                            # Record which direction object is crossing
                             if s2 > 0:
-                                self.direction_tracking[tid] = "IN"
+                                self.crossed_direction[tid] = "IN"
                             else:
-                                self.direction_tracking[tid] = "OUT"
+                                self.crossed_direction[tid] = "OUT"
 
-                            if tid not in self.counted:
-                                if s2 > 0:  # Going IN
+                        # Count only when object has crossed AND reached completion zone
+                        if tid in self.crossed_direction and tid not in self.counted:
+                            if tid in self.completion_zone:
+                                direction = self.crossed_direction[tid]
+                                
+                                if direction == "IN":
                                     self.in_count += 1
                                     print(f"✅ IN - ID:{tid}")
-                                else:  # Going OUT
+                                else:  # OUT
                                     self.out_count += 1
                                     print(f"✅ OUT - ID:{tid}")
-
+                                
                                 self.counted.add(tid)
 
                     self.hist[tid] = (cx, cy)
 
-                    # Draw bounding box
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    cv2.putText(frame, f"ID:{tid}", (x1, y1 - 10),
+                    # Draw bounding box with color based on status
+                    color = (0, 255, 0)  # Default green
+                    if tid in self.crossed_direction and tid not in self.counted:
+                        color = (0, 255, 255)  # Yellow - crossed but not completed
+                    elif tid in self.counted:
+                        color = (0, 200, 0)  # Dark green - completed
+                    
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                    
+                    # Show ID and status
+                    status = ""
+                    if tid in self.crossed_direction:
+                        status = f" ({self.crossed_direction[tid]})"
+                    cv2.putText(frame, f"ID:{tid}{status}", (x1, y1 - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 200, 0), 2)
 
             # Check for missed objects and false detections
