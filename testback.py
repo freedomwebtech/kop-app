@@ -14,7 +14,7 @@ from datetime import datetime
 class ObjectCounter:
     def __init__(self, source, model="best_float32.tflite",
                  classes_to_count=[0], show=True,
-                 json_file="line_coords.json"):
+                 json_file="line_coords_back.json"):
 
         self.source = source
         self.model = YOLO(model)
