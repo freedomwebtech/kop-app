@@ -31,7 +31,6 @@ def clamp_box(box, frame_shape):
     x2 = min(w - 1, int(x2))
     y2 = min(h - 1, int(y2))
     if x2 <= x1 or y2 <= y1:
-        # make a small 10x10 box around center fallback
         cx = int((x1 + x2) / 2)
         cy = int((y1 + y2) / 2)
         x1 = max(0, cx - 5)
@@ -67,7 +66,6 @@ def detect_box_color(frame, box):
 
     return "Unknown"
 
-
 # ==========================================================
 #                     OBJECT COUNTER CLASS
 # ==========================================================
@@ -76,8 +74,9 @@ class ObjectCounter:
     def __init__(self, source, model="best_float32.tflite",
                  classes_to_count=[0], show=True,
                  json_file="line_coords.json",
-                 pdf_folder="pdf_report"):
-
+                 pdf_folder="pdf_report",
+                 display_size=(1020, 600),
+                 translucent_overlay=False):
         self.source = source
         # initialize YOLO model (can be .pt or .tflite path)
         self.model = YOLO(model)
@@ -85,6 +84,8 @@ class ObjectCounter:
         self.classes = classes_to_count
         self.show = show
         self.pdf_folder = pdf_folder
+        self.display_size = display_size  # (width, height)
+        self.translucent_overlay = translucent_overlay
 
         # Create PDF folder if not exists
         if not os.path.exists(self.pdf_folder):
@@ -133,7 +134,7 @@ class ObjectCounter:
 
         self.frame_count = 0
 
-        cv2.namedWindow("ObjectCounter")
+        cv2.namedWindow("ObjectCounter", cv2.WINDOW_NORMAL)
         cv2.setMouseCallback("ObjectCounter", self.mouse_event)
 
     # ---------------- Session Management ----------------
@@ -164,16 +165,16 @@ class ObjectCounter:
             self.current_session_data['missed_cross'] = len(self.missed_cross)
             self.current_session_data['color_in'] = dict(self.color_in_count)
             self.current_session_data['color_out'] = dict(self.color_out_count)
-            
+
             self.sessions_data.append(self.current_session_data.copy())
 
     def generate_pdf_report(self):
         """Generate PDF report with all session data - Single PDF file"""
         pdf_filename = os.path.join(self.pdf_folder, "tracking_report.pdf")
-        
+
         doc = SimpleDocTemplate(pdf_filename, pagesize=A4)
         elements = []
-        
+
         # Styles
         styles = getSampleStyleSheet()
         title_style = ParagraphStyle(
@@ -184,23 +185,23 @@ class ObjectCounter:
             spaceAfter=30,
             alignment=1  # Center
         )
-        
+
         # Title
         title = Paragraph("OBJECT TRACKING REPORT", title_style)
         elements.append(title)
         elements.append(Spacer(1, 0.3*inch))
-        
+
         # Report Generation Info
         info_style = styles['Normal']
         report_info = Paragraph(f"<b>Report Generated:</b> {datetime.now().strftime('%A, %B %d, %Y at %H:%M:%S')}", info_style)
         elements.append(report_info)
         elements.append(Spacer(1, 0.2*inch))
-        
+
         # Session Summary Table
         if self.sessions_data:
             # Main data table
             data = [['Day', 'Date', 'Start Time', 'End Time', 'IN', 'OUT', 'Miss IN', 'Miss OUT', 'Cross']]
-            
+
             for session in self.sessions_data:
                 data.append([
                     session['day'],
@@ -213,7 +214,7 @@ class ObjectCounter:
                     str(session['missed_out']),
                     str(session['missed_cross'])
                 ])
-            
+
             table = Table(data, colWidths=[0.8*inch, 1*inch, 0.9*inch, 0.9*inch, 0.6*inch, 0.6*inch, 0.7*inch, 0.7*inch, 0.6*inch])
             table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1a5490')),
@@ -228,15 +229,15 @@ class ObjectCounter:
                 ('FONTSIZE', (0, 1), (-1, -1), 9),
                 ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.lightgrey])
             ]))
-            
+
             elements.append(table)
             elements.append(Spacer(1, 0.4*inch))
-            
+
             # Color-wise breakdown for each session
             subtitle = Paragraph("<b>Color-wise Breakdown</b>", styles['Heading2'])
             elements.append(subtitle)
             elements.append(Spacer(1, 0.2*inch))
-            
+
             for idx, session in enumerate(self.sessions_data, 1):
                 session_title = Paragraph(
                     f"<b>Session {idx}:</b> {session['date']} ({session['start_time']} - {session['end_time'] if session['end_time'] else 'N/A'})",
@@ -244,12 +245,12 @@ class ObjectCounter:
                 )
                 elements.append(session_title)
                 elements.append(Spacer(1, 0.1*inch))
-                
+
                 # Color data table
                 color_data = [['Color', 'IN Count', 'OUT Count']]
-                
+
                 all_colors = set(list(session['color_in'].keys()) + list(session['color_out'].keys()))
-                
+
                 if all_colors:
                     for color in sorted(all_colors):
                         in_count = session['color_in'].get(color, 0)
@@ -257,7 +258,7 @@ class ObjectCounter:
                         color_data.append([color, str(in_count), str(out_count)])
                 else:
                     color_data.append(['No Data', '0', '0'])
-                
+
                 color_table = Table(color_data, colWidths=[2*inch, 1.5*inch, 1.5*inch])
                 color_table.setStyle(TableStyle([
                     ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4a90e2')),
@@ -271,10 +272,10 @@ class ObjectCounter:
                     ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
                     ('FONTSIZE', (0, 1), (-1, -1), 9)
                 ]))
-                
+
                 elements.append(color_table)
                 elements.append(Spacer(1, 0.3*inch))
-        
+
         # Build PDF
         doc.build(elements)
         print(f"✅ PDF Report Generated: {pdf_filename}")
@@ -326,12 +327,12 @@ class ObjectCounter:
 
             elif tid not in self.counted and tid in self.hist:
                 cx, cy = self.hist[tid]
-                s = self.side(cx, cy, *self.line_p1, *self.line_p2)
-
-                if s > 0:
-                    self.missed_in.add(tid)
-                else:
-                    self.missed_out.add(tid)
+                if self.line_p1 and self.line_p2:
+                    s = self.side(cx, cy, *self.line_p1, *self.line_p2)
+                    if s > 0:
+                        self.missed_in.add(tid)
+                    else:
+                        self.missed_out.add(tid)
 
             self.hist.pop(tid, None)
             self.last_seen.pop(tid, None)
@@ -341,12 +342,12 @@ class ObjectCounter:
         """Reset all tracking data, generate PDF, and start new session"""
         # End current session before resetting
         self.end_current_session()
-        
+
         # Generate PDF with all sessions
         if self.sessions_data:
             pdf_file = self.generate_pdf_report()
             print(f"📄 PDF Updated: {pdf_file}")
-        
+
         # Reset counters
         self.hist.clear()
         self.last_seen.clear()
@@ -359,7 +360,7 @@ class ObjectCounter:
         self.missed_cross.clear()
         self.in_count = 0
         self.out_count = 0
-        
+
         # Start new session
         self.start_new_session()
         print("✅ RESET DONE - New session started | PDF saved")
@@ -368,27 +369,27 @@ class ObjectCounter:
     def run(self):
         print("RUNNING... Press O to Reset & Save PDF | ESC to Exit")
 
+        display_w, display_h = self.display_size
+
         while True:
             if self.is_rtsp:
-                # VideoStream returns frame directly
                 frame = self.cap.read()
-                # VideoStream sometimes returns tuple — handle both
                 if isinstance(frame, tuple):
                     ret, frame = frame
-                ret = frame is not None
+                else:
+                    ret = frame is not None
             else:
                 ret, frame = self.cap.read()
 
-            if not ret:
+            if not ret or frame is None:
                 break
 
             self.frame_count += 1
             # Throttle processing frequency if needed
             if self.frame_count % 3 != 0:
-                # still update last_seen? skip heavy processing to keep FPS
+                # show the raw frame (resized) even when skipping logic
                 if self.show:
-                    # show the raw frame (resized) even when skipping logic
-                    display_frame = cv2.resize(frame, (1020, 600))
+                    display_frame = cv2.resize(frame, (display_w, display_h), interpolation=cv2.INTER_LINEAR)
                     for pt in self.temp_points:
                         cv2.circle(display_frame, pt, 5, (0, 0, 255), -1)
                     if self.line_p1:
@@ -398,8 +399,8 @@ class ObjectCounter:
                         break
                 continue
 
-            # Resize frame to fixed size for consistent layout
-            frame = cv2.resize(frame, (1020, 600))
+            # Resize frame to display size first (draw UI on this size to keep consistent)
+            frame = cv2.resize(frame, (display_w, display_h), interpolation=cv2.INTER_LINEAR)
 
             # Draw temp points while user selects line
             for pt in self.temp_points:
@@ -413,117 +414,132 @@ class ObjectCounter:
             results = self.model.track(frame, persist=True, classes=self.classes, conf=0.7)
 
             # results[0] contains boxes; ensure structure exists
-            if results and len(results) > 0 and results[0].boxes.id is not None and self.line_p1:
-                ids = results[0].boxes.id.cpu().numpy().astype(int)
-                boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
+            if results and len(results) > 0 and self.line_p1 and hasattr(results[0].boxes, "xyxy"):
+                boxes_xy = results[0].boxes.xyxy
+                ids_attr = getattr(results[0].boxes, "id", None)
 
-                for tid, box in zip(ids, boxes):
-                    x1, y1, x2, y2 = box
-                    cx = int((x1 + x2) / 2)
-                    cy = int((y1 + y2) / 2)
+                if ids_attr is not None:
+                    try:
+                        ids = ids_attr.cpu().numpy().astype(int)
+                    except Exception:
+                        ids = np.array(ids_attr).astype(int)
+                else:
+                    ids = []
 
-                    # update last seen frame index
-                    self.last_seen[tid] = self.frame_count
+                try:
+                    boxes = boxes_xy.cpu().numpy().astype(int)
+                except Exception:
+                    boxes = np.array(boxes_xy).astype(int)
 
-                    # compute side positions
-                    prev_side = None
-                    if tid in self.hist:
-                        px, py = self.hist[tid]
-                        prev_side = self.side(px, py, *self.line_p1, *self.line_p2)
+                if len(ids) == len(boxes):
+                    for tid, box in zip(ids, boxes):
+                        x1, y1, x2, y2 = box
+                        cx = int((x1 + x2) / 2)
+                        cy = int((y1 + y2) / 2)
 
-                    curr_side = self.side(cx, cy, *self.line_p1, *self.line_p2)
+                        # update last seen frame index
+                        self.last_seen[tid] = self.frame_count
 
-                    # CROSSING DETECTION
-                    if prev_side is not None and prev_side * curr_side < 0:
-                        # object crossed the line this frame
-                        self.crossed_ids.add(tid)
+                        # compute side positions
+                        prev_side = None
+                        if tid in self.hist:
+                            px, py = self.hist[tid]
+                            prev_side = self.side(px, py, *self.line_p1, *self.line_p2)
 
-                        if tid not in self.counted:
-                            # ------------------ OUT ------------------
-                            # If current side is negative (example), treat as OUT direction
-                            # (Direction sign depends on how you drew the line; this keeps your older logic)
-                            if curr_side < 0:
-                                # OUT direction -> detect color BEFORE crossing using previous centroid area
-                                # build small box around previous centroid
-                                px, py = self.hist.get(tid, (cx, cy))
-                                prev_box = (px - 20, py - 20, px + 20, py + 20)
-                                color_name = detect_box_color(frame, prev_box)
-                                self.out_count += 1
-                                self.color_out_count[color_name] = self.color_out_count.get(color_name, 0) + 1
+                        curr_side = self.side(cx, cy, *self.line_p1, *self.line_p2)
 
-                            else:
-                                # IN direction -> detect color AFTER crossing using current bounding box
-                                color_name = detect_box_color(frame, (x1, y1, x2, y2))
-                                self.in_count += 1
-                                self.color_in_count[color_name] = self.color_in_count.get(color_name, 0) + 1
+                        # CROSSING DETECTION
+                        if prev_side is not None and prev_side * curr_side < 0:
+                            # object crossed the line this frame
+                            self.crossed_ids.add(tid)
 
-                            self.counted.add(tid)
+                            if tid not in self.counted:
+                                if curr_side < 0:
+                                    # OUT direction -> detect color BEFORE crossing using previous centroid area
+                                    px, py = self.hist.get(tid, (cx, cy))
+                                    prev_box = (px - 20, py - 20, px + 20, py + 20)
+                                    color_name = detect_box_color(frame, prev_box)
+                                    self.out_count += 1
+                                    self.color_out_count[color_name] = self.color_out_count.get(color_name, 0) + 1
+                                else:
+                                    # IN direction -> detect color AFTER crossing using current bounding box
+                                    color_name = detect_box_color(frame, (x1, y1, x2, y2))
+                                    self.in_count += 1
+                                    self.color_in_count[color_name] = self.color_in_count.get(color_name, 0) + 1
 
-                    # update history (centroid)
-                    self.hist[tid] = (cx, cy)
+                                self.counted.add(tid)
 
-                    # Draw bounding box and label
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    # show color label near box top-left
-                    # if object counted, show its color count label; else show 'Detecting...'
-                    display_color = "Unknown"
-                    # prefer color from counted maps if available for this tid (approximation)
-                    # we will display current detection (best-effort)
-                    display_color = detect_box_color(frame, (x1, y1, x2, y2))
-                    cv2.putText(frame, display_color, (x1, y1 - 10),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 200, 0), 2)
+                        # update history (centroid)
+                        self.hist[tid] = (cx, cy)
+
+                        # Draw bounding box and label
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                        display_color = detect_box_color(frame, (x1, y1, x2, y2))
+                        cv2.putText(frame, display_color, (x1, y1 - 10),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 200, 0), 2, lineType=cv2.LINE_AA)
 
             # MISSED CHECK
             if self.line_p1:
                 self.check_lost_ids()
 
-            # ================= ENHANCED DISPLAY WITH LARGER FONTS =================
+            # ================= ENHANCED DISPLAY (CRISP PANEL) =================
 
-            # Main overlay panel (increased height)
-            overlay = frame.copy()
-            cv2.rectangle(overlay, (0, 0), (1020, 160), (0, 0, 0), -1)
-            frame = cv2.addWeighted(overlay, 0.35, frame, 0.65, 0)
+            # Panel area (top)
+            panel_h = 160
+            w, h = display_w, display_h
+
+            if self.translucent_overlay:
+                # Blend only the top ROI to keep rest crisp
+                roi = frame[0:panel_h, 0:w].copy()
+                overlay = roi.copy()
+                cv2.rectangle(overlay, (0, 0), (w, panel_h), (0, 0, 0), -1)
+                alpha = 0.35
+                blended = cv2.addWeighted(overlay, alpha, roi, 1.0 - alpha, 0)
+                frame[0:panel_h, 0:w] = blended
+            else:
+                # Draw solid rectangle (crisp text) — recommended for sharpness
+                cv2.rectangle(frame, (0, 0), (w, panel_h), (0, 0, 0), -1)
 
             # --------- TITLE BAR ---------
             cv2.putText(frame, "TRACKING SYSTEM", (15, 32),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (100, 200, 255), 3)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (100, 200, 255), 3, lineType=cv2.LINE_AA)
             cv2.circle(frame, (250, 24), 7, (0, 255, 0), -1)
 
             # --------- TOTAL COUNTS ROW ---------
             y_row1 = 65
             font_large = 0.8
             thickness_bold = 3
-            
+
             # Total IN
             cv2.putText(frame, "IN:", (15, y_row1),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (0, 255, 150), thickness_bold)
+                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (0, 255, 150), thickness_bold, lineType=cv2.LINE_AA)
             cv2.putText(frame, str(self.in_count), (75, y_row1),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
+                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold, lineType=cv2.LINE_AA)
 
             # Total OUT
             cv2.putText(frame, "OUT:", (150, y_row1),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (100, 180, 255), thickness_bold)
+                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (100, 180, 255), thickness_bold, lineType=cv2.LINE_AA)
             cv2.putText(frame, str(self.out_count), (230, y_row1),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
+                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold, lineType=cv2.LINE_AA)
 
             # Missed counts (smaller but visible)
             cv2.putText(frame, "MISS IN:", (320, y_row1),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (100, 255, 255), 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (100, 255, 255), 2, lineType=cv2.LINE_AA)
             cv2.putText(frame, str(len(self.missed_in)), (430, y_row1),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2, lineType=cv2.LINE_AA)
 
             cv2.putText(frame, "MISS OUT:", (485, y_row1),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 100, 255), 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 100, 255), 2, lineType=cv2.LINE_AA)
             cv2.putText(frame, str(len(self.missed_out)), (615, y_row1),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2, lineType=cv2.LINE_AA)
 
             cv2.putText(frame, "CROSS:", (680, y_row1),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (100, 100, 255), 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (100, 100, 255), 2, lineType=cv2.LINE_AA)
             cv2.putText(frame, str(len(self.missed_cross)), (770, y_row1),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2, lineType=cv2.LINE_AA)
 
             # --------- SEPARATOR LINE ---------
-            cv2.line(frame, (10, 85), (1010, 85), (100, 100, 100), 2)
+            cv2.line(frame, (10, 85), (w-10, 85), (100, 100, 100), 2)
 
             # --------- BROWN BOX COUNTS ROW ---------
             y_row2 = 118
@@ -533,16 +549,16 @@ class ObjectCounter:
             # Brown box indicator (larger)
             cv2.rectangle(frame, (15, y_row2 - 25), (50, y_row2 - 5), (19, 69, 139), -1)
             cv2.rectangle(frame, (15, y_row2 - 25), (50, y_row2 - 5), (255, 255, 255), 2)
-            
+
             cv2.putText(frame, "BROWN IN:", (60, y_row2),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (100, 150, 255), thickness_bold)
+                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (100, 150, 255), thickness_bold, lineType=cv2.LINE_AA)
             cv2.putText(frame, str(brown_in), (240, y_row2),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
+                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold, lineType=cv2.LINE_AA)
 
             cv2.putText(frame, "BROWN OUT:", (350, y_row2),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (100, 150, 255), thickness_bold)
+                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (100, 150, 255), thickness_bold, lineType=cv2.LINE_AA)
             cv2.putText(frame, str(brown_out), (570, y_row2),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
+                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold, lineType=cv2.LINE_AA)
 
             # --------- WHITE BOX COUNTS ROW ---------
             y_row3 = 150
@@ -552,16 +568,16 @@ class ObjectCounter:
             # White box indicator (larger)
             cv2.rectangle(frame, (15, y_row3 - 25), (50, y_row3 - 5), (245, 245, 245), -1)
             cv2.rectangle(frame, (15, y_row3 - 25), (50, y_row3 - 5), (100, 100, 100), 2)
-            
+
             cv2.putText(frame, "WHITE IN:", (60, y_row3),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (200, 255, 200), thickness_bold)
+                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (200, 255, 200), thickness_bold, lineType=cv2.LINE_AA)
             cv2.putText(frame, str(white_in), (240, y_row3),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
+                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold, lineType=cv2.LINE_AA)
 
             cv2.putText(frame, "WHITE OUT:", (350, y_row3),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (200, 255, 200), thickness_bold)
+                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (200, 255, 200), thickness_bold, lineType=cv2.LINE_AA)
             cv2.putText(frame, str(white_out), (570, y_row3),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
+                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold, lineType=cv2.LINE_AA)
 
             if self.show:
                 cv2.imshow("ObjectCounter", frame)
@@ -589,7 +605,6 @@ class ObjectCounter:
 
         cv2.destroyAllWindows()
 
-
 # ==========================================================
 #                        MAIN EXECUTION
 # ==========================================================
@@ -597,10 +612,12 @@ class ObjectCounter:
 if __name__ == "__main__":
     # Example usage:
     counter = ObjectCounter(
-        source="your_video.mp4",  # or 0 for webcam, or "rtsp://..."
+        source=0,  # "your_video.mp4" or 0 for webcam, or "rtsp://..."
         model="best_float32.tflite",  # or "yolov8n.pt"
         classes_to_count=[0],  # class ids as per your model
         show=True,
-        pdf_folder="pdf_report"
+        pdf_folder="pdf_report",
+        display_size=(1020, 600),
+        translucent_overlay=False  # set True if you want the translucent top bar (may be slightly faded)
     )
     counter.run()
