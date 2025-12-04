@@ -210,10 +210,10 @@ class ObjectCounter:
                 # s2 < 0 means object moved TO negative side = OUT direction
                 if s < 0:
                     # Negative side = before crossing IN, so missed IN
-                    self.missed_in.add(tid)
+                    self.missed_out.add(tid)
                 else:
                     # Positive side = after crossing IN, so missed OUT
-                    self.missed_out.add(tid)
+                    self.missed_in.add(tid)
 
             self.hist.pop(tid, None)
             self.last_seen.pop(tid, None)
