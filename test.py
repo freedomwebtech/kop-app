@@ -6,11 +6,6 @@ import numpy as np
 from imutils.video import VideoStream
 import time
 from datetime import datetime
-from reportlab.lib import colors
-from reportlab.pagesizes import letter, A4
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import inch
 
 # ==========================================================
 #                HSV COLOR DETECTION (Brown + White)
@@ -53,18 +48,18 @@ class ObjectCounter:
     def __init__(self, source, model="best_float32.tflite",
                  classes_to_count=[0], show=True,
                  json_file="line_coords.json",
-                 pdf_folder="pdf_report"):
+                 report_folder="reports"):
 
         self.source = source
         self.model = YOLO(model)
         self.names = self.model.names
         self.classes = classes_to_count
         self.show = show
-        self.pdf_folder = pdf_folder
+        self.report_folder = report_folder
 
-        # Create PDF folder if not exists
-        if not os.path.exists(self.pdf_folder):
-            os.makedirs(self.pdf_folder)
+        # Create report folder if not exists
+        if not os.path.exists(self.report_folder):
+            os.makedirs(self.report_folder)
 
         # -------- RTSP or File --------
         if isinstance(source, str) and source.startswith("rtsp://"):
@@ -146,118 +141,62 @@ class ObjectCounter:
             
             self.sessions_data.append(self.current_session_data.copy())
 
-    def generate_pdf_report(self):
-        """Generate PDF report with all session data - Single PDF file"""
-        pdf_filename = os.path.join(self.pdf_folder, "tracking_report.pdf")
+    def generate_text_report(self):
+        """Generate text report with all session data"""
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        report_filename = os.path.join(self.report_folder, f"tracking_report_{timestamp}.txt")
         
-        doc = SimpleDocTemplate(pdf_filename, pagesize=A4)
-        elements = []
-        
-        # Styles
-        styles = getSampleStyleSheet()
-        title_style = ParagraphStyle(
-            'CustomTitle',
-            parent=styles['Heading1'],
-            fontSize=24,
-            textColor=colors.HexColor('#1a5490'),
-            spaceAfter=30,
-            alignment=1  # Center
-        )
-        
-        # Title
-        title = Paragraph("OBJECT TRACKING REPORT", title_style)
-        elements.append(title)
-        elements.append(Spacer(1, 0.3*inch))
-        
-        # Report Generation Info
-        info_style = styles['Normal']
-        report_info = Paragraph(f"<b>Report Generated:</b> {datetime.now().strftime('%A, %B %d, %Y at %H:%M:%S')}", info_style)
-        elements.append(report_info)
-        elements.append(Spacer(1, 0.2*inch))
-        
-        # Session Summary Table
-        if self.sessions_data:
-            # Main data table
-            data = [['Day', 'Date', 'Start Time', 'End Time', 'IN', 'OUT', 'Miss IN', 'Miss OUT', 'Cross']]
+        with open(report_filename, 'w') as f:
+            f.write("=" * 80 + "\n")
+            f.write("                    OBJECT TRACKING REPORT\n")
+            f.write("=" * 80 + "\n\n")
             
-            for session in self.sessions_data:
-                data.append([
-                    session['day'],
-                    session['date'],
-                    session['start_time'],
-                    session['end_time'] if session['end_time'] else 'N/A',
-                    str(session['in_count']),
-                    str(session['out_count']),
-                    str(session['missed_in']),
-                    str(session['missed_out']),
-                    str(session['missed_cross'])
-                ])
+            f.write(f"Report Generated: {datetime.now().strftime('%A, %B %d, %Y at %H:%M:%S')}\n\n")
             
-            table = Table(data, colWidths=[0.8*inch, 1*inch, 0.9*inch, 0.9*inch, 0.6*inch, 0.6*inch, 0.7*inch, 0.7*inch, 0.6*inch])
-            table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1a5490')),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, 0), 10),
-                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-                ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-                ('GRID', (0, 0), (-1, -1), 1, colors.black),
-                ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-                ('FONTSIZE', (0, 1), (-1, -1), 9),
-                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.lightgrey])
-            ]))
+            if self.sessions_data:
+                f.write("-" * 80 + "\n")
+                f.write("SESSION SUMMARY\n")
+                f.write("-" * 80 + "\n\n")
+                
+                for idx, session in enumerate(self.sessions_data, 1):
+                    f.write(f"Session {idx}:\n")
+                    f.write(f"  Day:        {session['day']}\n")
+                    f.write(f"  Date:       {session['date']}\n")
+                    f.write(f"  Start Time: {session['start_time']}\n")
+                    f.write(f"  End Time:   {session['end_time'] if session['end_time'] else 'N/A'}\n")
+                    f.write(f"  IN Count:   {session['in_count']}\n")
+                    f.write(f"  OUT Count:  {session['out_count']}\n")
+                    f.write(f"  Missed IN:  {session['missed_in']}\n")
+                    f.write(f"  Missed OUT: {session['missed_out']}\n")
+                    f.write(f"  Missed Cross: {session['missed_cross']}\n")
+                    f.write("\n")
+                    
+                    f.write("  Color-wise Breakdown:\n")
+                    all_colors = set(list(session['color_in'].keys()) + list(session['color_out'].keys()))
+                    
+                    if all_colors:
+                        for color in sorted(all_colors):
+                            in_count = session['color_in'].get(color, 0)
+                            out_count = session['color_out'].get(color, 0)
+                            f.write(f"    {color:10s} - IN: {in_count:3d}, OUT: {out_count:3d}\n")
+                    else:
+                        f.write("    No color data available\n")
+                    
+                    f.write("\n" + "-" * 80 + "\n\n")
             
-            elements.append(table)
-            elements.append(Spacer(1, 0.4*inch))
+            # Summary totals
+            total_in = sum(s['in_count'] for s in self.sessions_data)
+            total_out = sum(s['out_count'] for s in self.sessions_data)
             
-            # Color-wise breakdown for each session
-            subtitle = Paragraph("<b>Color-wise Breakdown</b>", styles['Heading2'])
-            elements.append(subtitle)
-            elements.append(Spacer(1, 0.2*inch))
-            
-            for idx, session in enumerate(self.sessions_data, 1):
-                session_title = Paragraph(
-                    f"<b>Session {idx}:</b> {session['date']} ({session['start_time']} - {session['end_time'] if session['end_time'] else 'N/A'})",
-                    styles['Heading3']
-                )
-                elements.append(session_title)
-                elements.append(Spacer(1, 0.1*inch))
-                
-                # Color data table
-                color_data = [['Color', 'IN Count', 'OUT Count']]
-                
-                all_colors = set(list(session['color_in'].keys()) + list(session['color_out'].keys()))
-                
-                if all_colors:
-                    for color in sorted(all_colors):
-                        in_count = session['color_in'].get(color, 0)
-                        out_count = session['color_out'].get(color, 0)
-                        color_data.append([color, str(in_count), str(out_count)])
-                else:
-                    color_data.append(['No Data', '0', '0'])
-                
-                color_table = Table(color_data, colWidths=[2*inch, 1.5*inch, 1.5*inch])
-                color_table.setStyle(TableStyle([
-                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4a90e2')),
-                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                    ('FONTSIZE', (0, 0), (-1, 0), 10),
-                    ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-                    ('BACKGROUND', (0, 1), (-1, -1), colors.lightblue),
-                    ('GRID', (0, 0), (-1, -1), 1, colors.black),
-                    ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-                    ('FONTSIZE', (0, 1), (-1, -1), 9)
-                ]))
-                
-                elements.append(color_table)
-                elements.append(Spacer(1, 0.3*inch))
+            f.write("OVERALL SUMMARY\n")
+            f.write("-" * 80 + "\n")
+            f.write(f"Total Sessions: {len(self.sessions_data)}\n")
+            f.write(f"Total IN:       {total_in}\n")
+            f.write(f"Total OUT:      {total_out}\n")
+            f.write("=" * 80 + "\n")
         
-        # Build PDF
-        doc.build(elements)
-        print(f"✅ PDF Report Generated: {pdf_filename}")
-        return pdf_filename
+        print(f"✅ Text Report Generated: {report_filename}")
+        return report_filename
 
     # ---------------- Mouse ----------------
     def mouse_event(self, event, x, y, flags, param):
@@ -308,18 +247,18 @@ class ObjectCounter:
 
             self.hist.pop(tid, None)
             self.last_seen.pop(tid, None)
-            self.color_at_crossing.pop(tid, None)  # Clean up color data
+            self.color_at_crossing.pop(tid, None)
 
     # ---------------- Reset Function ----------------
     def reset_all_data(self):
-        """Reset all tracking data, generate PDF, and start new session"""
+        """Reset all tracking data, generate report, and start new session"""
         # End current session before resetting
         self.end_current_session()
         
-        # Generate PDF with all sessions
+        # Generate text report with all sessions
         if self.sessions_data:
-            pdf_file = self.generate_pdf_report()
-            print(f"📄 PDF Updated: {pdf_file}")
+            report_file = self.generate_text_report()
+            print(f"📄 Report Updated: {report_file}")
         
         # Reset counters
         self.hist.clear()
@@ -337,11 +276,11 @@ class ObjectCounter:
         
         # Start new session
         self.start_new_session()
-        print("✅ RESET DONE - New session started | PDF saved")
+        print("✅ RESET DONE - New session started | Report saved")
 
     # ---------------- Main Loop ----------------
     def run(self):
-        print("RUNNING... Press O to Reset & Save PDF | ESC to Exit")
+        print("RUNNING... Press O to Reset & Save Report | ESC to Exit")
 
         while True:
             if self.is_rtsp:
@@ -391,11 +330,9 @@ class ObjectCounter:
                                 # Determine direction
                                 if s2 > 0:  # Going IN (positive side)
                                     # For IN: Use color BEFORE crossing (previous position)
-                                    # Use the previous box position stored
                                     if tid in self.color_at_crossing:
                                         color_name = self.color_at_crossing[tid]
                                     else:
-                                        # Fallback: detect from current position
                                         color_name = detect_box_color(frame, box)
                                     
                                     self.in_count += 1
@@ -413,8 +350,7 @@ class ObjectCounter:
                                 self.counted.add(tid)
                         
                         # ✅ Store color for objects on negative side (before line for IN direction)
-                        # This captures the color BEFORE they cross
-                        if s2 < 0:  # Object is on negative side (before line for IN movement)
+                        if s2 < 0:
                             color_name = detect_box_color(frame, box)
                             self.color_at_crossing[tid] = color_name
 
@@ -433,7 +369,7 @@ class ObjectCounter:
 
             # ================= ENHANCED DISPLAY WITH LARGER FONTS =================
 
-            # Main overlay panel (increased height)
+            # Main overlay panel
             overlay = frame.copy()
             cv2.rectangle(overlay, (0, 0), (1020, 160), (0, 0, 0), -1)
             frame = cv2.addWeighted(overlay, 0.35, frame, 0.65, 0)
@@ -460,7 +396,7 @@ class ObjectCounter:
             cv2.putText(frame, str(self.out_count), (230, y_row1),
                         cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
 
-            # Missed counts (smaller but visible)
+            # Missed counts
             cv2.putText(frame, "MISS IN:", (320, y_row1),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.55, (100, 255, 255), 2)
             cv2.putText(frame, str(len(self.missed_in)), (430, y_row1),
@@ -484,7 +420,6 @@ class ObjectCounter:
             brown_in = self.color_in_count.get("Brown", 0)
             brown_out = self.color_out_count.get("Brown", 0)
 
-            # Brown box indicator (larger)
             cv2.rectangle(frame, (15, y_row2 - 25), (50, y_row2 - 5), (19, 69, 139), -1)
             cv2.rectangle(frame, (15, y_row2 - 25), (50, y_row2 - 5), (255, 255, 255), 2)
             
@@ -503,7 +438,6 @@ class ObjectCounter:
             white_in = self.color_in_count.get("White", 0)
             white_out = self.color_out_count.get("White", 0)
 
-            # White box indicator (larger)
             cv2.rectangle(frame, (15, y_row3 - 25), (50, y_row3 - 5), (245, 245, 245), -1)
             cv2.rectangle(frame, (15, y_row3 - 25), (50, y_row3 - 5), (100, 100, 100), 2)
             
@@ -527,11 +461,11 @@ class ObjectCounter:
                 elif key == 27:
                     break
 
-        # Save final session and generate PDF before exit
+        # Save final session and generate report before exit
         self.end_current_session()
         if self.sessions_data:
-            self.generate_pdf_report()
-            print("📄 Final PDF generated on exit")
+            self.generate_text_report()
+            print("📄 Final report generated on exit")
 
         if self.is_rtsp:
             self.cap.stop()
@@ -552,6 +486,6 @@ if __name__ == "__main__":
         model="best_float32.tflite",
         classes_to_count=[0],
         show=True,
-        pdf_folder="pdf_report"
+        report_folder="reports"
     )
     counter.run()
