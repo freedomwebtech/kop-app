@@ -266,7 +266,7 @@ class ObjectCounter:
 
             if self.show:
                 cv2.imshow("ObjectCounter", frame)
-                cv2.imshow("Detection Mask", detection_frame)
+               # cv2.imshow("Detection Mask", detection_frame)
 
                 key = cv2.waitKey(1) & 0xFF
 
