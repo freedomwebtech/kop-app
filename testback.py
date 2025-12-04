@@ -36,12 +36,21 @@ class ObjectCounter:
         self.current_session_data = None
         self.start_new_session()
 
-        # -------- Tracking for Line Crossing (Previous Frame Data) --------
-        self.prev_positions = []  # List of (cx, cy) from previous frame
+        # -------- Tracking Data --------
+        self.hist = {}
+        self.last_seen = {}
+        self.crossed_ids = set()
+        self.counted = set()
 
         # -------- Counters --------
         self.in_count = 0
         self.out_count = 0
+
+        # -------- MISSED LOGIC --------
+        self.missed_in = set()
+        self.missed_out = set()
+        self.missed_cross = set()
+        self.max_missing_frames = 40
 
         # -------- Line --------
         self.line_p1 = None
@@ -64,7 +73,10 @@ class ObjectCounter:
             'start_time': datetime.now().strftime('%H:%M:%S'),
             'end_time': None,
             'in_count': 0,
-            'out_count': 0
+            'out_count': 0,
+            'missed_in': 0,
+            'missed_out': 0,
+            'missed_cross': 0
         }
 
     def end_current_session(self):
@@ -73,6 +85,9 @@ class ObjectCounter:
             self.current_session_data['end_time'] = datetime.now().strftime('%H:%M:%S')
             self.current_session_data['in_count'] = self.in_count
             self.current_session_data['out_count'] = self.out_count
+            self.current_session_data['missed_in'] = len(self.missed_in)
+            self.current_session_data['missed_out'] = len(self.missed_out)
+            self.current_session_data['missed_cross'] = len(self.missed_cross)
 
     def print_session_summary(self):
         """Print session summary to console"""
@@ -85,6 +100,9 @@ class ObjectCounter:
         print(f"End Time:      {self.current_session_data['end_time']}")
         print(f"IN Count:      {self.current_session_data['in_count']}")
         print(f"OUT Count:     {self.current_session_data['out_count']}")
+        print(f"Missed IN:     {self.current_session_data['missed_in']}")
+        print(f"Missed OUT:    {self.current_session_data['missed_out']}")
+        print(f"Missed Cross:  {self.current_session_data['missed_cross']}")
         print("=" * 80 + "\n")
 
     # ---------------- Mouse ----------------
@@ -110,43 +128,56 @@ class ObjectCounter:
 
     # ---------------- Utility ----------------
     def side(self, px, py, x1, y1, x2, y2):
-        """Calculate which side of line the point is on"""
         return (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
 
-    def find_closest_prev_point(self, current_pos, max_distance=100):
-        """Find the closest previous position to match with current detection"""
-        if not self.prev_positions:
-            return None
-        
-        cx, cy = current_pos
-        min_dist = float('inf')
-        closest_prev = None
-        closest_idx = -1
-        
-        for idx, (px, py) in enumerate(self.prev_positions):
-            dist = np.sqrt((cx - px)**2 + (cy - py)**2)
-            if dist < min_dist and dist < max_distance:
-                min_dist = dist
-                closest_prev = (px, py)
-                closest_idx = idx
-        
-        # Remove the matched previous position
-        if closest_idx >= 0:
-            self.prev_positions.pop(closest_idx)
-        
-        return closest_prev
+    # ---------------- MISSED TRACK HANDLER ----------------
+    def check_lost_ids(self):
+        current = self.frame_count
+        lost = []
+
+        for tid, last in self.last_seen.items():
+            if current - last > self.max_missing_frames:
+                lost.append(tid)
+
+        for tid in lost:
+            if tid in self.crossed_ids and tid not in self.counted:
+                self.missed_cross.add(tid)
+
+            elif tid not in self.counted and tid in self.hist:
+                cx, cy = self.hist[tid]
+                s = self.side(cx, cy, *self.line_p1, *self.line_p2)
+
+                # s > 0 means positive side (after crossing IN = waiting to go OUT)
+                # s < 0 means negative side (before crossing IN = waiting to come IN)
+                if s < 0:
+                    self.missed_in.add(tid)
+                else:
+                    self.missed_out.add(tid)
+
+            self.hist.pop(tid, None)
+            self.last_seen.pop(tid, None)
 
     # ---------------- Reset Function ----------------
     def reset_all_data(self):
         """Reset all tracking data and start new session"""
+        # End current session before resetting
         self.end_current_session()
+        
+        # Print session summary to console
         self.print_session_summary()
         
         # Reset counters
-        self.prev_positions = []
+        self.hist.clear()
+        self.last_seen.clear()
+        self.crossed_ids.clear()
+        self.counted.clear()
+        self.missed_in.clear()
+        self.missed_out.clear()
+        self.missed_cross.clear()
         self.in_count = 0
         self.out_count = 0
         
+        # Start new session
         self.start_new_session()
         print("✅ RESET DONE - New session started")
 
@@ -168,84 +199,102 @@ class ObjectCounter:
 
             frame = cv2.resize(frame, (1020, 600))
 
-            # Draw temporary points for line setup
             for pt in self.temp_points:
                 cv2.circle(frame, pt, 5, (0, 0, 255), -1)
 
-            # Draw counting line
             if self.line_p1:
-                cv2.line(frame, self.line_p1, self.line_p2, (255, 255, 255), 3)
+                cv2.line(frame, self.line_p1, self.line_p2,
+                         (255, 255, 255), 2)
 
-            # Run YOLO detection (no tracking)
-            results = self.model(frame, classes=self.classes, conf=0.80, verbose=False)
+            results = self.model.track(
+                frame, persist=True, classes=self.classes, conf=0.80)
 
-            current_positions = []
-            
-            if results[0].boxes is not None:
+            if results[0].boxes.id is not None and self.line_p1:
+                ids = results[0].boxes.id.cpu().numpy().astype(int)
                 boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
-                
-                for box in boxes:
+
+                for tid, box in zip(ids, boxes):
                     x1, y1, x2, y2 = box
                     cx = int((x1 + x2) / 2)
                     cy = int((y1 + y2) / 2)
-                    
-                    current_positions.append((cx, cy))
-                    
-                    # NO DRAWING - No bounding box, No ID, No circles
 
-            # Check for line crossings
-            if self.line_p1 and len(current_positions) > 0:
-                for current_pos in current_positions:
-                    cx, cy = current_pos
-                    
-                    # Find matching previous position
-                    prev_pos = self.find_closest_prev_point(current_pos)
-                    
-                    if prev_pos is not None:
-                        px, py = prev_pos
-                        
-                        # Calculate which side of line
+                    self.last_seen[tid] = self.frame_count
+
+                    if tid in self.hist:
+                        px, py = self.hist[tid]
                         s1 = self.side(px, py, *self.line_p1, *self.line_p2)
                         s2 = self.side(cx, cy, *self.line_p1, *self.line_p2)
-                        
-                        # Check if crossed the line (sign change)
-                        if s1 * s2 < 0:
-                            if s2 > 0:  # Going IN
-                                self.in_count += 1
-                                print(f"✅ IN - Position: ({cx},{cy})")
-                            else:  # Going OUT
-                                self.out_count += 1
-                                print(f"✅ OUT - Position: ({cx},{cy})")
 
-            # Store current positions for next frame
-            self.prev_positions = current_positions.copy()
+                        if s1 * s2 < 0:  # Crossed the line
+                            self.crossed_ids.add(tid)
+
+                            if tid not in self.counted:
+                                if s2 > 0:  # Going IN
+                                    self.in_count += 1
+                                    print(f"✅ IN - ID:{tid}")
+                                else:  # Going OUT
+                                    self.out_count += 1
+                                    print(f"✅ OUT - ID:{tid}")
+
+                                self.counted.add(tid)
+
+                    self.hist[tid] = (cx, cy)
+
+                    # Draw bounding box
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    cv2.putText(frame, f"ID:{tid}", (x1, y1 - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 200, 0), 2)
+
+            # Check for missed objects
+            if self.line_p1:
+                self.check_lost_ids()
 
             # ================= DISPLAY PANEL =================
+
+            # Main overlay panel
             overlay = frame.copy()
             cv2.rectangle(overlay, (0, 0), (1020, 100), (0, 0, 0), -1)
             frame = cv2.addWeighted(overlay, 0.4, frame, 0.6, 0)
 
-            # Title
-            cv2.putText(frame, "COUNTING SYSTEM", (15, 32),
+            # --------- TITLE BAR ---------
+            cv2.putText(frame, "TRACKING SYSTEM", (15, 32),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (100, 200, 255), 3)
             cv2.circle(frame, (250, 24), 7, (0, 255, 0), -1)
 
-            # Counters
+            # --------- COUNTS ROW ---------
             y_row = 70
-            font_size = 1.2
+            font_size = 0.9
             thickness = 3
             
-            # IN Counter
+            # Total IN
             cv2.putText(frame, "IN:", (15, y_row),
                         cv2.FONT_HERSHEY_SIMPLEX, font_size, (0, 255, 150), thickness)
-            cv2.putText(frame, str(self.in_count), (120, y_row),
+            cv2.putText(frame, str(self.in_count), (90, y_row),
                         cv2.FONT_HERSHEY_SIMPLEX, font_size, (255, 255, 255), thickness)
 
-            # OUT Counter
-            cv2.putText(frame, "OUT:", (300, y_row),
+            # Total OUT
+            cv2.putText(frame, "OUT:", (180, y_row),
                         cv2.FONT_HERSHEY_SIMPLEX, font_size, (100, 180, 255), thickness)
-            cv2.putText(frame, str(self.out_count), (420, y_row),
+            cv2.putText(frame, str(self.out_count), (270, y_row),
                         cv2.FONT_HERSHEY_SIMPLEX, font_size, (255, 255, 255), thickness)
+
+            # Missed IN
+            cv2.putText(frame, "MISS IN:", (380, y_row),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.65, (100, 255, 255), 2)
+            cv2.putText(frame, str(len(self.missed_in)), (520, y_row),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
+
+            # Missed OUT
+            cv2.putText(frame, "MISS OUT:", (600, y_row),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 100, 255), 2)
+            cv2.putText(frame, str(len(self.missed_out)), (750, y_row),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
+
+            # Missed CROSS
+            cv2.putText(frame, "CROSS:", (830, y_row),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.65, (100, 100, 255), 2)
+            cv2.putText(frame, str(len(self.missed_cross)), (940, y_row),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
 
             if self.show:
                 cv2.imshow("ObjectCounter", frame)
@@ -253,6 +302,7 @@ class ObjectCounter:
 
                 if key == ord('o') or key == ord('O'):
                     self.reset_all_data()
+
                 elif key == 27:
                     break
 
@@ -273,6 +323,7 @@ class ObjectCounter:
 # ==========================================================
 
 if __name__ == "__main__":
+    # Example usage:
     counter = ObjectCounter(
         source="your_video.mp4",  # or 0 for webcam, or "rtsp://..."
         model="best_float32.tflite",
