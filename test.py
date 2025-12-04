@@ -7,7 +7,7 @@ from imutils.video import VideoStream
 import time
 from datetime import datetime
 from reportlab.lib import colors
-from reportlab.lib.pagesizes import letter, A4
+from reportlab.pagesizes import letter, A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
@@ -86,6 +86,9 @@ class ObjectCounter:
         self.last_seen = {}
         self.crossed_ids = set()
         self.counted = set()
+        
+        # ✅ NEW: Store color detected at crossing point
+        self.color_at_crossing = {}
 
         # -------- Counters --------
         self.in_count = 0
@@ -305,6 +308,7 @@ class ObjectCounter:
 
             self.hist.pop(tid, None)
             self.last_seen.pop(tid, None)
+            self.color_at_crossing.pop(tid, None)  # Clean up color data
 
     # ---------------- Reset Function ----------------
     def reset_all_data(self):
@@ -322,6 +326,7 @@ class ObjectCounter:
         self.last_seen.clear()
         self.crossed_ids.clear()
         self.counted.clear()
+        self.color_at_crossing.clear()
         self.color_in_count.clear()
         self.color_out_count.clear()
         self.missed_in.clear()
@@ -359,7 +364,6 @@ class ObjectCounter:
                 cv2.line(frame, self.line_p1, self.line_p2,
                          (255, 255, 255), 2)
 
-            # ✅ CHANGED: Confidence level from 0.7 to 0.80
             results = self.model.track(
                 frame, persist=True, classes=self.classes, conf=0.80)
 
@@ -373,34 +377,55 @@ class ObjectCounter:
                     cy = int((y1 + y2) / 2)
 
                     self.last_seen[tid] = self.frame_count
-                    color_name = detect_box_color(frame, box)
 
                     if tid in self.hist:
                         px, py = self.hist[tid]
                         s1 = self.side(px, py, *self.line_p1, *self.line_p2)
                         s2 = self.side(cx, cy, *self.line_p1, *self.line_p2)
 
-                        if s1 * s2 < 0:
+                        # ✅ NEW LOGIC: Detect color at appropriate position based on direction
+                        if s1 * s2 < 0:  # Crossed the line
                             self.crossed_ids.add(tid)
 
                             if tid not in self.counted:
-                                if s2 > 0:
+                                # Determine direction
+                                if s2 > 0:  # Going IN (positive side)
+                                    # For IN: Use color BEFORE crossing (previous position)
+                                    # Use the previous box position stored
+                                    if tid in self.color_at_crossing:
+                                        color_name = self.color_at_crossing[tid]
+                                    else:
+                                        # Fallback: detect from current position
+                                        color_name = detect_box_color(frame, box)
+                                    
                                     self.in_count += 1
                                     self.color_in_count[color_name] = self.color_in_count.get(color_name, 0) + 1
-                                else:
+                                    print(f"✅ IN - ID:{tid} Color:{color_name} (detected before line)")
+                                    
+                                else:  # Going OUT (negative side)
+                                    # For OUT: Detect color AFTER crossing (current position)
+                                    color_name = detect_box_color(frame, box)
+                                    
                                     self.out_count += 1
                                     self.color_out_count[color_name] = self.color_out_count.get(color_name, 0) + 1
+                                    print(f"✅ OUT - ID:{tid} Color:{color_name} (detected after line)")
 
                                 self.counted.add(tid)
+                        
+                        # ✅ Store color for objects on negative side (before line for IN direction)
+                        # This captures the color BEFORE they cross
+                        if s2 < 0:  # Object is on negative side (before line for IN movement)
+                            color_name = detect_box_color(frame, box)
+                            self.color_at_crossing[tid] = color_name
 
                     self.hist[tid] = (cx, cy)
 
-                    cv2.rectangle(frame, (x1, y1),
-                                  (x2, y2), (0, 255, 0), 2)
-
-                    cv2.putText(frame, color_name, (x1, y1 - 10),
-                                cv2.FONT_HERSHEY_SIMPLEX,
-                                0.6, (255, 200, 0), 2)
+                    # Display current detected color
+                    display_color = self.color_at_crossing.get(tid, detect_box_color(frame, box))
+                    
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    cv2.putText(frame, f"{display_color}", (x1, y1 - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 200, 0), 2)
 
             # ✅ MISSED CHECK ACTIVE
             if self.line_p1:
