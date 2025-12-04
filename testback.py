@@ -191,9 +191,7 @@ class ObjectCounter:
                     
                     current_positions.append((cx, cy))
                     
-                    # Draw only center point - NO BOUNDING BOX, NO ID
-                    cv2.circle(frame, (cx, cy), 6, (0, 255, 255), -1)
-                    cv2.circle(frame, (cx, cy), 8, (255, 255, 255), 2)
+                    # NO DRAWING - No bounding box, No ID, No circles
 
             # Check for line crossings
             if self.line_p1 and len(current_positions) > 0:
@@ -215,13 +213,9 @@ class ObjectCounter:
                             if s2 > 0:  # Going IN
                                 self.in_count += 1
                                 print(f"✅ IN - Position: ({cx},{cy})")
-                                # Visual feedback
-                                cv2.circle(frame, (cx, cy), 15, (0, 255, 0), 3)
                             else:  # Going OUT
                                 self.out_count += 1
                                 print(f"✅ OUT - Position: ({cx},{cy})")
-                                # Visual feedback
-                                cv2.circle(frame, (cx, cy), 15, (0, 100, 255), 3)
 
             # Store current positions for next frame
             self.prev_positions = current_positions.copy()
@@ -252,10 +246,6 @@ class ObjectCounter:
                         cv2.FONT_HERSHEY_SIMPLEX, font_size, (100, 180, 255), thickness)
             cv2.putText(frame, str(self.out_count), (420, y_row),
                         cv2.FONT_HERSHEY_SIMPLEX, font_size, (255, 255, 255), thickness)
-
-            # Active detections
-            cv2.putText(frame, f"Detected: {len(current_positions)}", (620, y_row),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
 
             if self.show:
                 cv2.imshow("ObjectCounter", frame)
