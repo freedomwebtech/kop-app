@@ -95,10 +95,10 @@ class ObjectCounter:
         self.missed_cross = set()
         self.max_missing_frames = 40
         
-        # ✅ NEW: Delay for IN color detection (2 seconds)
+        # ✅ NEW: Delay for IN color detection (3 seconds)
         # Assuming ~30 FPS and processing every 3rd frame = ~10 processed frames per second
-        # 2 seconds × 10 = 20 frames
-        self.in_detection_delay = 20  # frames to wait after crossing (2 seconds)
+        # 3 seconds × 10 = 30 frames
+        self.in_detection_delay = 30  # frames to wait after crossing (3 seconds)
 
         # -------- Line --------
         self.line_p1 = None
@@ -254,7 +254,7 @@ class ObjectCounter:
 
     # ---------------- Main Loop ----------------
     def run(self):
-        print(f"RUNNING... Conf: {self.conf} | IN Color Delay: 2 sec | Press O to Reset | ESC to Exit")
+        print(f"RUNNING... Conf: {self.conf} | IN Color Delay: 3 sec | Press O to Reset | ESC to Exit")
 
         while True:
             if self.is_rtsp:
@@ -290,24 +290,24 @@ class ObjectCounter:
                         crossed_frame = self.pending_in_detection[tid]
                         frames_since_cross = self.frame_count - crossed_frame
                         
-                        # If 2 seconds has passed since crossing
+                        # If 3 seconds has passed since crossing
                         if frames_since_cross >= self.in_detection_delay:
                             # Find the box for this track id
                             tid_idx = list(ids).index(tid)
                             box = boxes[tid_idx]
                             
-                            # Detect color NOW (after 2 second delay)
+                            # Detect color NOW (after 3 second delay)
                             color_name = detect_box_color(frame, box)
                             
                             self.in_count += 1
                             self.color_in_count[color_name] = self.color_in_count.get(color_name, 0) + 1
-                            print(f"✅ IN - ID:{tid} Color:{color_name} (detected 2 sec after crossing)")
+                            print(f"✅ IN - ID:{tid} Color:{color_name} (detected 3 sec after crossing)")
                             
                             # Mark as counted and remove from pending
                             self.counted.add(tid)
                             self.pending_in_detection.pop(tid)
                     else:
-                        # Object disappeared before 2 seconds passed
+                        # Object disappeared before 3 seconds passed
                         crossed_frame = self.pending_in_detection[tid]
                         frames_since_cross = self.frame_count - crossed_frame
                         
@@ -316,7 +316,7 @@ class ObjectCounter:
                             # Check if it's been missing for too long
                             if tid in self.last_seen:
                                 if self.frame_count - self.last_seen[tid] > self.max_missing_frames:
-                                    print(f"⚠️ IN - ID:{tid} Lost before 2 sec delay (marked as missed)")
+                                    print(f"⚠️ IN - ID:{tid} Lost before 3 sec delay (marked as missed)")
                                     self.missed_in.add(tid)
                                     self.pending_in_detection.pop(tid)
 
@@ -340,9 +340,9 @@ class ObjectCounter:
                             if tid not in self.counted:
                                 # Determine direction
                                 if s2 > 0:  # Going IN (positive side)
-                                    # For IN: Schedule color detection AFTER 2 seconds
+                                    # For IN: Schedule color detection AFTER 3 seconds
                                     self.pending_in_detection[tid] = self.frame_count
-                                    print(f"⏳ IN - ID:{tid} Crossed line, waiting 2 sec for color detection...")
+                                    print(f"⏳ IN - ID:{tid} Crossed line, waiting 3 sec for color detection...")
                                     
                                 else:  # Going OUT (negative side)
                                     # For OUT: Detect color immediately at current position
@@ -361,7 +361,7 @@ class ObjectCounter:
                         crossed_frame = self.pending_in_detection[tid]
                         frames_elapsed = self.frame_count - crossed_frame
                         seconds_elapsed = frames_elapsed / 10  # ~10 processed frames per second
-                        seconds_remaining = 2 - seconds_elapsed
+                        seconds_remaining = 3 - seconds_elapsed
                         
                         display_text = f"Waiting... {int(seconds_remaining)}s"
                         text_color = (0, 255, 255)  # Cyan for waiting
