@@ -216,87 +216,72 @@ class ObjectCounter:
             if self.line_p1:
                 self.check_lost_ids()
 
-            # ================= MINIMAL COMPACT TOP DISPLAY =================
+            # ================= BEAUTIFUL TRANSPARENT DISPLAY =================
 
-            # Ultra light transparent overlay
+            # Transparent dark overlay for readability
             overlay = frame.copy()
-            cv2.rectangle(overlay, (0, 0), (1020, 65), (10, 10, 10), -1)
-            frame = cv2.addWeighted(overlay, 0.35, frame, 0.65, 0)
+            cv2.rectangle(overlay, (0, 0), (1020, 80), (0, 0, 0), -1)
+            frame = cv2.addWeighted(overlay, 0.25, frame, 0.75, 0)
 
-            # --------- TITLE BAR (Compact) ---------
-            cv2.rectangle(frame, (5, 5), (250, 28), (25, 25, 25), -1)
-            cv2.rectangle(frame, (5, 5), (250, 28), (70, 160, 255), 1)
-            cv2.putText(frame, "TRACKING SYSTEM", (15, 20),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            cv2.circle(frame, (240, 16), 4, (0, 255, 0), -1)
+            # --------- TITLE BAR ---------
+            cv2.putText(frame, "TRACKING SYSTEM", (15, 25),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (100, 200, 255), 2)
+            cv2.circle(frame, (210, 18), 5, (0, 255, 0), -1)
 
-            # --------- COUNTERS ROW (Minimal) ---------
-            y_top = 35
-            y_bottom = 60
-            box_width = 85
-            gap = 8
+            # --------- MAIN COUNTERS ROW ---------
+            y_pos = 55
+            x_start = 15
+            gap = 95
+            font_size = 0.55
             
             # TOTAL IN
-            x1 = 5
-            cv2.rectangle(frame, (x1, y_top), (x1 + box_width, y_bottom), (0, 70, 0), -1)
-            cv2.rectangle(frame, (x1, y_top), (x1 + box_width, y_bottom), (0, 255, 0), 1)
-            cv2.putText(frame, "IN", (x1 + 8, y_top + 12),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (180, 255, 180), 1)
-            cv2.putText(frame, str(self.in_count), (x1 + 30, y_top + 20),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv2.putText(frame, "IN:", (x_start, y_pos),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_size, (0, 255, 150), 2)
+            cv2.putText(frame, str(self.in_count), (x_start + 35, y_pos),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_size, (255, 255, 255), 2)
 
             # TOTAL OUT
-            x2 = x1 + box_width + gap
-            cv2.rectangle(frame, (x2, y_top), (x2 + box_width, y_bottom), (0, 0, 70), -1)
-            cv2.rectangle(frame, (x2, y_top), (x2 + box_width, y_bottom), (0, 120, 255), 1)
-            cv2.putText(frame, "OUT", (x2 + 8, y_top + 12),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (180, 200, 255), 1)
-            cv2.putText(frame, str(self.out_count), (x2 + 30, y_top + 20),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            x_out = x_start + gap
+            cv2.putText(frame, "OUT:", (x_out, y_pos),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_size, (100, 180, 255), 2)
+            cv2.putText(frame, str(self.out_count), (x_out + 50, y_pos),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_size, (255, 255, 255), 2)
 
             # MISSED IN
-            x3 = x2 + box_width + gap
-            cv2.rectangle(frame, (x3, y_top), (x3 + box_width, y_bottom), (45, 30, 0), -1)
-            cv2.rectangle(frame, (x3, y_top), (x3 + box_width, y_bottom), (255, 150, 0), 1)
-            cv2.putText(frame, "Miss IN", (x3 + 8, y_top + 12),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 200, 120), 1)
-            cv2.putText(frame, str(len(self.missed_in)), (x3 + 30, y_top + 20),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            x_miss_in = x_out + gap + 10
+            cv2.putText(frame, "MISS IN:", (x_miss_in, y_pos),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_size, (100, 255, 255), 2)
+            cv2.putText(frame, str(len(self.missed_in)), (x_miss_in + 90, y_pos),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_size, (255, 255, 255), 2)
 
             # MISSED OUT
-            x4 = x3 + box_width + gap
-            cv2.rectangle(frame, (x4, y_top), (x4 + box_width, y_bottom), (45, 0, 45), -1)
-            cv2.rectangle(frame, (x4, y_top), (x4 + box_width, y_bottom), (220, 0, 220), 1)
-            cv2.putText(frame, "Miss OUT", (x4 + 5, y_top + 12),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 180, 255), 1)
-            cv2.putText(frame, str(len(self.missed_out)), (x4 + 30, y_top + 20),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            x_miss_out = x_miss_in + gap + 25
+            cv2.putText(frame, "MISS OUT:", (x_miss_out, y_pos),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_size, (255, 100, 255), 2)
+            cv2.putText(frame, str(len(self.missed_out)), (x_miss_out + 105, y_pos),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_size, (255, 255, 255), 2)
 
             # MISS CROSS
-            x5 = x4 + box_width + gap
-            cv2.rectangle(frame, (x5, y_top), (x5 + box_width, y_bottom), (45, 0, 0), -1)
-            cv2.rectangle(frame, (x5, y_top), (x5 + box_width, y_bottom), (255, 0, 0), 1)
-            cv2.putText(frame, "Cross", (x5 + 8, y_top + 12),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 120, 120), 1)
-            cv2.putText(frame, str(len(self.missed_cross)), (x5 + 30, y_top + 20),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            x_cross = x_miss_out + gap + 35
+            cv2.putText(frame, "CROSS:", (x_cross, y_pos),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_size, (100, 100, 255), 2)
+            cv2.putText(frame, str(len(self.missed_cross)), (x_cross + 80, y_pos),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_size, (255, 255, 255), 2)
 
-            # --------- COLOR BREAKDOWN (Ultra Compact) ---------
-            x_color = x5 + box_width + gap + 3
+            # --------- COLOR BREAKDOWN ---------
+            x_color_start = 15
+            y_color = 75
+            color_gap = 120
             
             for idx, (color, cnt) in enumerate(self.color_in_count.items()):
-                x_pos = x_color + (idx * 75)
-                cv2.rectangle(frame, (x_pos, y_top), (x_pos + 72, y_top + 11), (0, 60, 0), -1)
-                cv2.rectangle(frame, (x_pos, y_top), (x_pos + 72, y_top + 11), (0, 200, 0), 1)
-                cv2.putText(frame, f"{color} IN:{cnt}", (x_pos + 3, y_top + 8),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.3, (180, 255, 180), 1)
+                x_pos = x_color_start + (idx * color_gap)
+                cv2.putText(frame, f"{color} IN: {cnt}", (x_pos, y_color),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (150, 255, 150), 1)
 
             for idx, (color, cnt) in enumerate(self.color_out_count.items()):
-                x_pos = x_color + (idx * 75)
-                cv2.rectangle(frame, (x_pos, y_top + 14), (x_pos + 72, y_bottom), (0, 0, 60), -1)
-                cv2.rectangle(frame, (x_pos, y_top + 14), (x_pos + 72, y_bottom), (120, 120, 255), 1)
-                cv2.putText(frame, f"{color} OUT:{cnt}", (x_pos + 3, y_top + 22),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.3, (200, 200, 255), 1)
+                x_pos = x_color_start + (idx * color_gap) + 250
+                cv2.putText(frame, f"{color} OUT: {cnt}", (x_pos, y_color),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 255), 1)
 
             if self.show:
                 cv2.imshow("ObjectCounter", frame)
@@ -325,3 +310,18 @@ class ObjectCounter:
             self.cap.release()
 
         cv2.destroyAllWindows()
+
+
+# ==========================================================
+#                        MAIN EXECUTION
+# ==========================================================
+
+if __name__ == "__main__":
+    # Example usage:
+    counter = ObjectCounter(
+        source="your_video.mp4",  # or 0 for webcam, or "rtsp://..."
+        model="best_float32.tflite",
+        classes_to_count=[0],
+        show=True
+    )
+    counter.run()
