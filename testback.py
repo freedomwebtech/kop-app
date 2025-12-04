@@ -121,7 +121,7 @@ class ObjectCounter:
         return (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
 
     # ✅ -------- APPLY MASK (ONLY LINE REGION) --------
-    def apply_line_mask(self, frame, thickness=160):
+    def apply_line_mask(self, frame, thickness=1060):
         if self.line_p1 is None or self.line_p2 is None:
             return frame
 
