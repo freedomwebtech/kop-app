@@ -88,7 +88,7 @@ class ObjectCounter:
 
         # ✅ NEW: Track IN crossings with timestamp for delayed color detection
         self.pending_in_detections = {}  # {track_id: frame_number_when_crossed}
-        self.delay_frames = int(0.20 * self.fps)  # 0.4 seconds worth of frames
+        self.delay_frames = int(0.10 * self.fps)  # 0.4 seconds worth of frames
 
         # -------- Counters --------
         self.in_count = 0
