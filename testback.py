@@ -47,6 +47,10 @@ class ObjectCounter:
 
         self.frame_count = 0
 
+        # -------- Keyboard Point Selection --------
+        self.point_selection_mode = False
+        self.current_mouse_pos = (0, 0)
+
         # -------- Window --------
         cv2.namedWindow("ObjectCounter")
         cv2.setMouseCallback("ObjectCounter", self.mouse_event)
@@ -82,12 +86,21 @@ class ObjectCounter:
 
     # ================= REGION =================
     def mouse_event(self, event, x, y, flags, param):
-        if event == cv2.EVENT_LBUTTONDOWN and len(self.region) < 4:
-            self.region.append((x, y))
-            print("Point:", x, y)
-            if len(self.region) == 4:
-                self.save_region()
-                print("✅ Rectangle Saved!")
+        # Track mouse position for visual feedback
+        if event == cv2.EVENT_MOUSEMOVE:
+            self.current_mouse_pos = (x, y)
+        
+        # Only allow clicks when in point selection mode
+        if event == cv2.EVENT_LBUTTONDOWN and self.point_selection_mode:
+            if len(self.region) < 4:
+                self.region.append((x, y))
+                print(f"Point {len(self.region)}: ({x}, {y})")
+                
+                if len(self.region) == 4:
+                    self.save_region()
+                    self.point_selection_mode = False
+                    self.region_initialized = False  # Force re-initialization
+                    print("✅ Rectangle Saved! Press 'P' again to modify.")
 
 
     def save_region(self):
@@ -99,6 +112,18 @@ class ObjectCounter:
         if os.path.exists(self.json_file):
             with open(self.json_file) as f:
                 self.region = json.load(f)["region"]
+                print(f"✅ Loaded region from {self.json_file}")
+
+
+    def delete_region(self):
+        """Delete current region coordinates"""
+        self.region = []
+        self.region_initialized = False
+        if os.path.exists(self.json_file):
+            os.remove(self.json_file)
+            print("🗑️  Region coordinates deleted!")
+        else:
+            print("🗑️  No saved region to delete")
 
 
     def initialize_region(self):
@@ -151,9 +176,15 @@ class ObjectCounter:
 
     # ================= LOOP =================
     def run(self):
-        print("Draw rectangle using 4 clicks")
-        print("O = Reset | ESC = Exit")
-        print("✅ CORRECT LOGIC: Entering region = IN, Exiting region = OUT")
+        print("\n" + "=" * 50)
+        print("CONTROLS:")
+        print("=" * 50)
+        print("P = Start drawing rectangle (4 clicks)")
+        print("S = Delete saved coordinates")
+        print("O = Reset counters")
+        print("ESC = Exit")
+        print("=" * 50)
+        print("✅ LOGIC: Entering region = IN, Exiting region = OUT\n")
 
         while True:
             if self.is_rtsp:
@@ -167,18 +198,37 @@ class ObjectCounter:
             if self.frame_count % 3 != 0:
                 continue
 
-            #frame = cv2.resize(frame, (1020, 600))
-
-            for p in self.region:
+            # Draw existing points
+            for i, p in enumerate(self.region):
                 cv2.circle(frame, p, 5, (0, 0, 255), -1)
+                cv2.putText(frame, str(i+1), (p[0]+10, p[1]), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
 
+            # Draw lines between points
+            if len(self.region) > 1:
+                for i in range(len(self.region) - 1):
+                    cv2.line(frame, self.region[i], self.region[i+1], (255, 0, 0), 2)
+                if len(self.region) == 4:
+                    cv2.line(frame, self.region[3], self.region[0], (255, 0, 0), 2)
+
+            # Show cursor crosshair when in point selection mode
+            if self.point_selection_mode:
+                x, y = self.current_mouse_pos
+                cv2.line(frame, (x-20, y), (x+20, y), (0, 255, 255), 1)
+                cv2.line(frame, (x, y-20), (x, y+20), (0, 255, 255), 1)
+                cv2.putText(frame, f"Point {len(self.region)+1}/4", (x+10, y-10),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+
+            # Initialize region if we have 4 points
             if len(self.region) == 4 and not self.region_initialized:
                 self.initialize_region()
                 self.region_initialized = True
 
+            # Draw rectangle
             if self.region_initialized:
                 cv2.rectangle(frame, (self.x1, self.y1), (self.x2, self.y2), (0,255,0), 2)
 
+            # Detection and tracking
             results = self.model.track(frame, persist=True,
                                        classes=self.classes,
                                        conf=0.80)
@@ -209,14 +259,31 @@ class ObjectCounter:
                         cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
             cv2.putText(frame, f"OUT: {self.out_count}", (220,35),
                         cv2.FONT_HERSHEY_SIMPLEX, 1, (0,120,255), 2)
+            
+            # Show mode indicator
+            if self.point_selection_mode:
+                cv2.putText(frame, f"DRAWING MODE [{len(self.region)}/4]", (450,35),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,255), 2)
 
             if self.show:
                 cv2.imshow("ObjectCounter", frame)
                 key = cv2.waitKey(1)
 
-                if key == ord('o'):
+                if key == ord('p') or key == ord('P'):
+                    if not self.point_selection_mode:
+                        self.point_selection_mode = True
+                        self.region = []  # Clear existing points
+                        self.region_initialized = False
+                        print("📍 Point selection mode ON - Click 4 points")
+                    
+                elif key == ord('s') or key == ord('S'):
+                    self.delete_region()
+                    self.point_selection_mode = False
+                    
+                elif key == ord('o') or key == ord('O'):
                     self.reset_all()
-                elif key == 27:
+                    
+                elif key == 27:  # ESC
                     break
 
         self.end_session()
