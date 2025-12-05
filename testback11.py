@@ -72,23 +72,22 @@ class ObjectCounter:
 
 
     def print_summary(self):
-        print("\n" + "=" * 60)
+        print("\n" + "=" * 50)
         print("SESSION SUMMARY")
-        print("=" * 60)
+        print("=" * 50)
         for k, v in self.current_session_data.items():
             print(f"{k:12}: {v}")
-        print("=" * 60)
+        print("=" * 50)
 
 
     # ================= REGION =================
     def mouse_event(self, event, x, y, flags, param):
-        if event == cv2.EVENT_LBUTTONDOWN:
-            if len(self.region) < 4:
-                self.region.append((x, y))
-                print("Point:", x, y)
-                if len(self.region) == 4:
-                    self.save_region()
-                    print("Rectangle Saved!")
+        if event == cv2.EVENT_LBUTTONDOWN and len(self.region) < 4:
+            self.region.append((x, y))
+            print("Point:", x, y)
+            if len(self.region) == 4:
+                self.save_region()
+                print("✅ Rectangle Saved!")
 
 
     def save_region(self):
@@ -189,33 +188,32 @@ class ObjectCounter:
                     x1, y1, x2, y2 = box
                     cx, cy = (x1+x2)//2, (y1+y2)//2
 
-                    self.last_seen[tid] = self.frame_count
-
                     if tid in self.hist:
-                        self.count_objects((cx,cy), self.hist[tid], tid)
+                        self.count_objects((cx, cy), self.hist[tid], tid)
 
-                    self.hist[tid] = (cx,cy)
+                    self.hist[tid] = (cx, cy)
 
-                    inside = self.is_inside((cx,cy))
+                    inside = self.is_inside((cx, cy))
                     color = (0,255,0) if inside else (0,0,255)
 
-                    cv2.rectangle(frame, (x1,y1),(x2,y2), color, 2)
+                    cv2.rectangle(frame, (x1,y1), (x2,y2), color, 2)
                     cv2.putText(frame, f"ID:{tid}", (x1,y1-5),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
             # HUD (ONLY IN / OUT)
-            cv2.rectangle(frame, (0, 0), (1020, 60), (0, 0, 0), -1)
-            cv2.putText(frame, f"IN: {self.in_count}", (30,40),
+            cv2.rectangle(frame, (0, 0), (1020, 50), (0, 0, 0), -1)
+            cv2.putText(frame, f"IN: {self.in_count}", (30,35),
                         cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
-            cv2.putText(frame, f"OUT: {self.out_count}", (220,40),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0,100,255), 2)
+            cv2.putText(frame, f"OUT: {self.out_count}", (220,35),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0,120,255), 2)
 
             if self.show:
                 cv2.imshow("ObjectCounter", frame)
-                k = cv2.waitKey(1)
-                if k == ord("o"):
+                key = cv2.waitKey(1)
+
+                if key == ord('o'):
                     self.reset_all()
-                elif k == 27:
+                elif key == 27:
                     break
 
         self.end_session()
