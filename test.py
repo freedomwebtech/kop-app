@@ -88,10 +88,9 @@ class ObjectCounter:
         self.color_in_count = {}
         self.color_out_count = {}
 
-        # ✅ FIXED MISSED LOGIC - Based on last position side
+        # ✅ ONLY IN/OUT MISSED (NO CROSS)
         self.missed_in = set()
         self.missed_out = set()
-        self.missed_cross = set()
         self.max_missing_frames = 40
 
         # -------- Line --------
@@ -118,7 +117,6 @@ class ObjectCounter:
             'out_count': 0,
             'missed_in': 0,
             'missed_out': 0,
-            'missed_cross': 0,
             'color_in': {},
             'color_out': {}
         }
@@ -131,7 +129,6 @@ class ObjectCounter:
             self.current_session_data['out_count'] = self.out_count
             self.current_session_data['missed_in'] = len(self.missed_in)
             self.current_session_data['missed_out'] = len(self.missed_out)
-            self.current_session_data['missed_cross'] = len(self.missed_cross)
             self.current_session_data['color_in'] = dict(self.color_in_count)
             self.current_session_data['color_out'] = dict(self.color_out_count)
 
@@ -148,7 +145,6 @@ class ObjectCounter:
         print(f"OUT Count:     {self.current_session_data['out_count']}")
         print(f"Missed IN:     {self.current_session_data['missed_in']}")
         print(f"Missed OUT:    {self.current_session_data['missed_out']}")
-        print(f"Missed Cross:  {self.current_session_data['missed_cross']}")
         print("\nColor-wise Breakdown:")
         
         all_colors = set(
@@ -191,15 +187,14 @@ class ObjectCounter:
     def side(self, px, py, x1, y1, x2, y2):
         return (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
 
-    # ================= FIXED MISSED TRACK HANDLER =================
+    # ================= FIXED MISSED TRACK HANDLER (NO CROSS) =================
     def check_lost_ids(self):
         """
         Check for objects that disappeared without being counted.
         
-        ✅ FIXED LOGIC:
+        ✅ ONLY IN/OUT MISSED (CROSS LOGIC REMOVED):
         - If crossed line & ended on IN side (s2 > 0) → Missed IN
         - If crossed line & ended on OUT side (s2 < 0) → Missed OUT  
-        - If never crossed → Missed Cross
         """
         current = self.frame_count
         lost = []
@@ -209,7 +204,7 @@ class ObjectCounter:
                 lost.append(tid)
 
         for tid in lost:
-            # Case 1: Object crossed the line but wasn't counted
+            # Only check crossed objects that weren't counted
             if tid in self.crossed_ids and tid not in self.counted:
                 # Get last known position to determine expected direction
                 if tid in self.hist:
@@ -232,11 +227,6 @@ class ObjectCounter:
                         self.missed_in.add(tid)
                     elif origin == "OUT":
                         self.missed_out.add(tid)
-            
-            # Case 2: Object never crossed the line
-            elif tid not in self.counted and tid not in self.crossed_ids:
-                self.missed_cross.add(tid)
-                print(f"⚠️ MISSED CROSS - ID:{tid} (disappeared without crossing)")
 
             # Cleanup
             self.hist.pop(tid, None)
@@ -264,7 +254,6 @@ class ObjectCounter:
         self.color_out_count.clear()
         self.missed_in.clear()
         self.missed_out.clear()
-        self.missed_cross.clear()
         self.in_count = 0
         self.out_count = 0
         
@@ -366,11 +355,11 @@ class ObjectCounter:
                     cv2.putText(frame, f"{display_color} [{origin_label}]", (x1, y1 - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 200, 0), 2)
 
-            # ✅ MISSED CHECK ACTIVE
+            # ✅ MISSED CHECK ACTIVE (NO CROSS)
             if self.line_p1:
                 self.check_lost_ids()
 
-            # ================= ENHANCED DISPLAY WITH LARGER FONTS =================
+            # ================= DISPLAY WITHOUT CROSS =================
 
             # Main overlay panel
             overlay = frame.copy()
@@ -399,21 +388,16 @@ class ObjectCounter:
             cv2.putText(frame, str(self.out_count), (230, y_row1),
                         cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
 
-            # Missed counts
+            # Missed counts (NO CROSS)
             cv2.putText(frame, "MISS IN:", (320, y_row1),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (100, 255, 255), 2)
-            cv2.putText(frame, str(len(self.missed_in)), (430, y_row1),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (100, 255, 255), 2)
+            cv2.putText(frame, str(len(self.missed_in)), (450, y_row1),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
-            cv2.putText(frame, "MISS OUT:", (485, y_row1),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 100, 255), 2)
-            cv2.putText(frame, str(len(self.missed_out)), (615, y_row1),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
-
-            cv2.putText(frame, "CROSS:", (680, y_row1),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (100, 100, 255), 2)
-            cv2.putText(frame, str(len(self.missed_cross)), (770, y_row1),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
+            cv2.putText(frame, "MISS OUT:", (530, y_row1),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 100, 255), 2)
+            cv2.putText(frame, str(len(self.missed_out)), (680, y_row1),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
             # --------- SEPARATOR LINE ---------
             cv2.line(frame, (10, 85), (1010, 85), (100, 100, 100), 2)
