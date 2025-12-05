@@ -6,7 +6,7 @@ import time
 from datetime import datetime
 from imutils.video import VideoStream
 import numpy as np
-from shapely.geometry import Point, Polygon
+from shapely.geometry import Point, LineString
 
 
 class ObjectCounter:
@@ -41,15 +41,15 @@ class ObjectCounter:
         self.in_count = 0
         self.out_count = 0
 
-        # -------- Polygon Region --------
+        # -------- Line Region --------
         self.region = []
         self.region_initialized = False
         self.json_file = json_file
         self.load_region()
         
-        # Shapely polygon for contains check
+        # Shapely line for intersection check
         self.r_s = None
-        self.Point = Point
+        self.LineString = LineString
 
         self.frame_count = 0
 
@@ -90,7 +90,7 @@ class ObjectCounter:
         print("=" * 50)
 
 
-    # ================= POLYGON REGION =================
+    # ================= LINE REGION =================
     def mouse_event(self, event, x, y, flags, param):
         # Track mouse position for visual feedback
         if event == cv2.EVENT_MOUSEMOVE:
@@ -98,23 +98,30 @@ class ObjectCounter:
         
         # Only allow clicks when in point selection mode
         if event == cv2.EVENT_LBUTTONDOWN and self.point_selection_mode:
-            self.region.append((x, y))
-            print(f"Point {len(self.region)}: ({x}, {y})")
+            if len(self.region) < 2:
+                self.region.append((x, y))
+                print(f"Point {len(self.region)}: ({x}, {y})")
+                
+                if len(self.region) == 2:
+                    self.save_region()
+                    self.initialize_region()
+                    self.point_selection_mode = False
+                    print("✅ Line saved! Press 'P' to redraw.")
 
 
     def save_region(self):
-        """Save polygon points to JSON file"""
+        """Save line points to JSON file"""
         with open(self.json_file, "w") as f:
             json.dump({"region": self.region}, f)
-        print(f"✅ Polygon with {len(self.region)} points saved!")
+        print(f"✅ Line with 2 points saved!")
 
 
     def load_region(self):
-        """Load polygon points from JSON file"""
+        """Load line points from JSON file"""
         if os.path.exists(self.json_file):
             with open(self.json_file) as f:
                 self.region = json.load(f)["region"]
-                print(f"✅ Loaded polygon with {len(self.region)} points from {self.json_file}")
+                print(f"✅ Loaded line from {self.json_file}")
 
 
     def delete_region(self):
@@ -124,65 +131,65 @@ class ObjectCounter:
         self.r_s = None
         if os.path.exists(self.json_file):
             os.remove(self.json_file)
-            print("🗑️  Polygon coordinates deleted!")
+            print("🗑️  Line coordinates deleted!")
         else:
-            print("🗑️  No saved polygon to delete")
+            print("🗑️  No saved line to delete")
 
 
     def initialize_region(self):
-        """Convert region points to numpy array and Shapely polygon"""
-        if len(self.region) >= 3:
-            # Create polygon from points (not rectangle!)
-            self.polygon_points = np.array(self.region, dtype=np.int32)
-            self.r_s = Polygon(self.region)
+        """Convert region points to Shapely LineString"""
+        if len(self.region) == 2:
+            # Create line from two points
+            self.r_s = self.LineString(self.region)
             self.region_initialized = True
             
-            # Calculate bounding box dimensions for direction detection
-            x_coords = [p[0] for p in self.region]
-            y_coords = [p[1] for p in self.region]
-            self.region_width = max(x_coords) - min(x_coords)
-            self.region_height = max(y_coords) - min(y_coords)
+            # Determine if line is vertical or horizontal
+            dx = abs(self.region[0][0] - self.region[1][0])
+            dy = abs(self.region[0][1] - self.region[1][1])
             
-            print(f"✅ Polygon initialized: {len(self.region)} points")
-            print(f"   Bounding box: W={self.region_width}, H={self.region_height}")
-            if self.region_width < self.region_height:
-                print("   Vertical orientation: Right=IN, Left=OUT")
+            if dx < dy:
+                self.line_orientation = "vertical"
+                print(f"✅ Vertical line initialized: Right=IN, Left=OUT")
             else:
-                print("   Horizontal orientation: Down=IN, Up=OUT")
+                self.line_orientation = "horizontal"
+                print(f"✅ Horizontal line initialized: Down=IN, Up=OUT")
         else:
-            print("⚠️  Need at least 3 points to create a polygon")
+            print("⚠️  Need exactly 2 points to create a line")
             self.region_initialized = False
 
 
-    # ================= COUNT LOGIC (POLYGON DIRECTION-BASED) =================
+    # ================= COUNT LOGIC (LINE INTERSECTION) =================
     def count_objects(self, current_centroid, prev_position, track_id):
-        """Count objects based on movement direction within polygon"""
+        """Count objects when they cross the line"""
         if prev_position is None or track_id in self.counted_ids:
             return
 
-        # Check if current position is inside the polygon
-        if len(self.region) > 2 and self.r_s.contains(self.Point(current_centroid)):
-            # Determine motion direction for vertical or horizontal polygons
-            if self.region_width < self.region_height:
-                # Vertical polygon: check horizontal movement
-                if current_centroid[0] > prev_position[0]:  # Moving right
-                    self.in_count += 1
-                    self.counted_ids.append(track_id)
-                    print(f"✅ IN ID {track_id} (moved right in vertical polygon)")
-                else:  # Moving left
-                    self.out_count += 1
-                    self.counted_ids.append(track_id)
-                    print(f"✅ OUT ID {track_id} (moved left in vertical polygon)")
-            else:
-                # Horizontal polygon: check vertical movement
-                if current_centroid[1] > prev_position[1]:  # Moving downward
-                    self.in_count += 1
-                    self.counted_ids.append(track_id)
-                    print(f"✅ IN ID {track_id} (moved down in horizontal polygon)")
-                else:  # Moving upward
-                    self.out_count += 1
-                    self.counted_ids.append(track_id)
-                    print(f"✅ OUT ID {track_id} (moved up in horizontal polygon)")
+        # Check if movement path intersects with the counting line
+        if len(self.region) == 2:
+            movement_line = self.LineString([prev_position, current_centroid])
+            
+            if self.r_s.intersects(movement_line):
+                # Determine orientation of the region (vertical or horizontal)
+                if abs(self.region[0][0] - self.region[1][0]) < abs(self.region[0][1] - self.region[1][1]):
+                    # Vertical region: Compare x-coordinates to determine direction
+                    if current_centroid[0] > prev_position[0]:  # Moving right
+                        self.in_count += 1
+                        self.counted_ids.append(track_id)
+                        print(f"✅ IN ID {track_id} (crossed line moving right)")
+                    else:  # Moving left
+                        self.out_count += 1
+                        self.counted_ids.append(track_id)
+                        print(f"✅ OUT ID {track_id} (crossed line moving left)")
+                else:
+                    # Horizontal region: Compare y-coordinates to determine direction
+                    if current_centroid[1] > prev_position[1]:  # Moving downward
+                        self.in_count += 1
+                        self.counted_ids.append(track_id)
+                        print(f"✅ IN ID {track_id} (crossed line moving down)")
+                    else:  # Moving upward
+                        self.out_count += 1
+                        self.counted_ids.append(track_id)
+                        print(f"✅ OUT ID {track_id} (crossed line moving up)")
 
 
     # ================= RESET =================
@@ -205,15 +212,14 @@ class ObjectCounter:
         print("\n" + "=" * 50)
         print("CONTROLS:")
         print("=" * 50)
-        print("P = Start drawing polygon (click multiple points)")
-        print("ENTER = Finish polygon and save")
+        print("P = Start drawing line (2 clicks)")
         print("S = Delete saved coordinates")
         print("O = Reset counters")
         print("ESC = Exit")
         print("=" * 50)
-        print("✅ DIRECTION LOGIC:")
-        print("   - Vertical polygon: Right=IN, Left=OUT")
-        print("   - Horizontal polygon: Down=IN, Up=OUT\n")
+        print("✅ LINE CROSSING LOGIC:")
+        print("   - Vertical line: Right=IN, Left=OUT")
+        print("   - Horizontal line: Down=IN, Up=OUT\n")
 
         while True:
             if self.is_rtsp:
@@ -227,40 +233,48 @@ class ObjectCounter:
             if self.frame_count % 3 != 0:
                 continue
 
-            # Draw existing polygon points
+            # Draw existing line points
             for i, p in enumerate(self.region):
-                cv2.circle(frame, p, 5, (0, 0, 255), -1)
-                cv2.putText(frame, str(i+1), (p[0]+10, p[1]), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                cv2.circle(frame, p, 8, (0, 0, 255), -1)
+                cv2.putText(frame, str(i+1), (p[0]+15, p[1]), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 
-            # Draw polygon lines
-            if len(self.region) > 1:
-                for i in range(len(self.region) - 1):
-                    cv2.line(frame, self.region[i], self.region[i+1], (255, 0, 0), 2)
+            # Draw the counting line
+            if len(self.region) == 2:
+                # Draw thick line with glow effect
+                cv2.line(frame, self.region[0], self.region[1], (255, 255, 255), 8)
+                cv2.line(frame, self.region[0], self.region[1], (0, 255, 0), 4)
                 
-                # Close the polygon if finished
-                if self.region_initialized and len(self.region) > 2:
-                    cv2.line(frame, self.region[-1], self.region[0], (255, 0, 0), 2)
-
-            # Draw filled polygon with transparency
-            if self.region_initialized and len(self.region) >= 3:
-                overlay = frame.copy()
-                cv2.fillPoly(overlay, [self.polygon_points], (0, 255, 0))
-                cv2.addWeighted(overlay, 0.3, frame, 0.7, 0, frame)
-                cv2.polylines(frame, [self.polygon_points], True, (0, 255, 0), 2)
+                # Draw direction arrows
+                mid_x = (self.region[0][0] + self.region[1][0]) // 2
+                mid_y = (self.region[0][1] + self.region[1][1]) // 2
+                
+                if self.region_initialized:
+                    if self.line_orientation == "vertical":
+                        # Show horizontal arrows for vertical line
+                        cv2.arrowedLine(frame, (mid_x - 30, mid_y), (mid_x - 50, mid_y), 
+                                      (0, 120, 255), 3, tipLength=0.4)  # OUT (left)
+                        cv2.arrowedLine(frame, (mid_x + 30, mid_y), (mid_x + 50, mid_y), 
+                                      (0, 255, 0), 3, tipLength=0.4)  # IN (right)
+                    else:
+                        # Show vertical arrows for horizontal line
+                        cv2.arrowedLine(frame, (mid_x, mid_y - 30), (mid_x, mid_y - 50), 
+                                      (0, 120, 255), 3, tipLength=0.4)  # OUT (up)
+                        cv2.arrowedLine(frame, (mid_x, mid_y + 30), (mid_x, mid_y + 50), 
+                                      (0, 255, 0), 3, tipLength=0.4)  # IN (down)
 
             # Show cursor crosshair when in point selection mode
             if self.point_selection_mode:
                 x, y = self.current_mouse_pos
-                cv2.line(frame, (x-20, y), (x+20, y), (0, 255, 255), 1)
-                cv2.line(frame, (x, y-20), (x, y+20), (0, 255, 255), 1)
+                cv2.line(frame, (x-20, y), (x+20, y), (0, 255, 255), 2)
+                cv2.line(frame, (x, y-20), (x, y+20), (0, 255, 255), 2)
                 
-                # Preview line from last point to cursor
-                if len(self.region) > 0:
-                    cv2.line(frame, self.region[-1], (x, y), (255, 255, 0), 1)
+                # Preview line from first point to cursor
+                if len(self.region) == 1:
+                    cv2.line(frame, self.region[0], (x, y), (255, 255, 0), 2)
                 
-                cv2.putText(frame, f"Point {len(self.region)+1}", (x+10, y-10),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+                cv2.putText(frame, f"Point {len(self.region)+1}/2", (x+10, y-10),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
             # Detection and tracking
             results = self.model.track(frame, persist=True,
@@ -280,16 +294,18 @@ class ObjectCounter:
 
                     self.hist[tid] = (cx, cy)
 
-                    # Check if inside polygon using Shapely
-                    inside = self.r_s.contains(self.Point((cx, cy)))
-                    color = (0,255,0) if inside else (0,0,255)
+                    # Color based on whether already counted
+                    color = (128, 128, 128) if tid in self.counted_ids else (255, 255, 0)
 
                     cv2.rectangle(frame, (x1,y1), (x2,y2), color, 2)
                     cv2.putText(frame, f"ID:{tid}", (x1,y1-5),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
                     
-                    # Draw trajectory line
-                    if tid in self.hist:
+                    # Draw center point
+                    cv2.circle(frame, (cx, cy), 4, color, -1)
+                    
+                    # Draw trajectory line if object has history
+                    if tid in self.hist and len(self.hist) > 1:
                         cv2.line(frame, self.hist[tid], (cx, cy), color, 2)
 
             # HUD (IN / OUT)
@@ -301,11 +317,11 @@ class ObjectCounter:
             
             # Show mode indicator
             if self.point_selection_mode:
-                cv2.putText(frame, f"DRAWING MODE [{len(self.region)} points]", (450,35),
+                cv2.putText(frame, f"DRAWING LINE [{len(self.region)}/2]", (450,35),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,255), 2)
-            elif len(self.region) >= 3:
-                direction = "V" if self.region_width < self.region_height else "H"
-                cv2.putText(frame, f"POLYGON: {len(self.region)}pts ({direction})", (450,35),
+            elif len(self.region) == 2:
+                orientation = self.line_orientation.upper()[0] if self.region_initialized else "?"
+                cv2.putText(frame, f"LINE ({orientation})", (450,35),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,0), 2)
 
             if self.show:
@@ -318,16 +334,7 @@ class ObjectCounter:
                         self.region = []  # Clear existing points
                         self.region_initialized = False
                         self.r_s = None
-                        print("📍 Polygon drawing mode ON - Click points, press ENTER to finish")
-                    
-                elif key == 13:  # ENTER key
-                    if self.point_selection_mode and len(self.region) >= 3:
-                        self.save_region()
-                        self.initialize_region()
-                        self.point_selection_mode = False
-                        print(f"✅ Polygon finished with {len(self.region)} points")
-                    elif self.point_selection_mode:
-                        print("⚠️  Need at least 3 points to create a polygon")
+                        print("📍 Line drawing mode ON - Click 2 points")
                 
                 elif key == ord('s') or key == ord('S'):
                     self.delete_region()
