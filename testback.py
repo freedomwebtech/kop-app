@@ -167,7 +167,7 @@ class ObjectCounter:
             if self.frame_count % 3 != 0:
                 continue
 
-            frame = cv2.resize(frame, (1020, 600))
+            #frame = cv2.resize(frame, (1020, 600))
 
             for p in self.region:
                 cv2.circle(frame, p, 5, (0, 0, 255), -1)
