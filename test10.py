@@ -48,7 +48,7 @@ class ObjectCounter:
         self.in_count = 0
         self.out_count = 0
 
-        # ONLY MISSED IN/OUT
+        # ONLY MISSED
         self.missed_in = set()
         self.missed_out = set()
         self.max_missing_frames = 40
@@ -125,7 +125,7 @@ class ObjectCounter:
     def side(self, px, py, x1, y1, x2, y2):
         return (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
 
-    # ---------------- MISSED HANDLER ----------------
+    # ================= MISSED TRACK HANDLER =================
     def check_lost_ids(self):
         current = self.frame_count
         lost = []
@@ -139,7 +139,7 @@ class ObjectCounter:
                 if tid in self.hist:
                     last_cx, last_cy = self.hist[tid]
                     last_side = self.side(last_cx, last_cy, *self.line_p1, *self.line_p2)
-
+                    
                     if last_side > 0:
                         self.missed_in.add(tid)
                         print(f"⚠️ MISSED IN - ID:{tid}")
@@ -151,7 +151,7 @@ class ObjectCounter:
             self.last_seen.pop(tid, None)
             self.origin_side.pop(tid, None)
 
-    # ---------------- Reset ----------------
+    # ---------------- Reset Function ----------------
     def reset_all_data(self):
         self.end_current_session()
         self.print_session_summary()
@@ -183,8 +183,16 @@ class ObjectCounter:
 
             self.frame_count += 1
 
-            # Resize frame to 640x360
+            # Resize frame for stable processing
             frame = cv2.resize(frame, (640, 360))
+
+            # ============== DISPLAY IN/OUT COUNTERS ==============
+            cv2.putText(frame, f"IN  : {self.in_count}", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+
+            cv2.putText(frame, f"OUT : {self.out_count}", (10, 70),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
+            # ======================================================
 
             for pt in self.temp_points:
                 cv2.circle(frame, pt, 5, (0, 0, 255), -1)
@@ -192,8 +200,7 @@ class ObjectCounter:
             if self.line_p1:
                 cv2.line(frame, self.line_p1, self.line_p2, (255, 255, 255), 2)
 
-            results = self.model.track(
-                frame, persist=True, classes=self.classes, conf=0.80)
+            results = self.model.track(frame, persist=True, classes=self.classes, conf=0.80)
 
             if results[0].boxes.id is not None and self.line_p1:
                 ids = results[0].boxes.id.cpu().numpy().astype(int)
@@ -208,10 +215,7 @@ class ObjectCounter:
 
                     if tid not in self.hist:
                         s_init = self.side(cx, cy, *self.line_p1, *self.line_p2)
-                        if s_init < 0:
-                            self.origin_side[tid] = "IN"
-                        else:
-                            self.origin_side[tid] = "OUT"
+                        self.origin_side[tid] = "IN" if s_init < 0 else "OUT"
 
                     if tid in self.hist:
                         px, py = self.hist[tid]
