@@ -7,10 +7,6 @@ from imutils.video import VideoStream
 import time
 from datetime import datetime
 
-# ==========================================================
-#                     OBJECT COUNTER CLASS
-# ==========================================================
-
 class ObjectCounter:
     def __init__(self, source, model="best_float32.tflite",
                  classes_to_count=[0], show=True,
@@ -48,9 +44,14 @@ class ObjectCounter:
         self.miss_in_count = 0
         self.miss_out_count = 0
 
-        # -------- MISSED LOGIC --------
-        self.missed_in = set()
-        self.missed_out = set()
+        # ✅ NEW: Active tracking status for moving objects
+        self.active_in_direction = set()   # IDs currently moving toward IN
+        self.active_out_direction = set()  # IDs currently moving toward OUT
+        
+        # ✅ Permanent missed IDs
+        self.permanent_missed_in = set()
+        self.permanent_missed_out = set()
+        
         self.max_missing_frames = 40
 
         # -------- Line --------
@@ -128,14 +129,12 @@ class ObjectCounter:
     def side(self, px, py, x1, y1, x2, y2):
         return (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
 
-    # ================= FIXED MISSED LOGIC =================
+    # ✅ NEW: Check lost IDs and convert active misses to permanent
     def check_lost_ids(self):
         """
-        Check for objects that disappeared without being counted.
-        
-        ✅ FIXED LOGIC:
-        - If crossed line & ended on IN side (s2 > 0) → Missed IN
-        - If crossed line & ended on OUT side (s2 < 0) → Missed OUT  
+        Check for disappeared objects:
+        - If ID was in active_in_direction but disappeared → permanent MISS IN
+        - If ID was in active_out_direction but disappeared → permanent MISS OUT
         """
         current = self.frame_count
         lost = []
@@ -145,27 +144,27 @@ class ObjectCounter:
                 lost.append(tid)
 
         for tid in lost:
-            # Only check crossed objects that weren't counted
-            if tid in self.crossed_ids and tid not in self.counted:
-                if tid in self.hist:
-                    last_cx, last_cy = self.hist[tid]
-                    last_side = self.side(last_cx, last_cy, *self.line_p1, *self.line_p2)
-                    
-                    # IN logic: ended on positive side
-                    if last_side > 0:
-                        self.missed_in.add(tid)
-                        self.miss_in_count += 1
-                        print(f"⚠️ MISSED IN - ID:{tid}")
-                    
-                    # OUT logic: ended on negative side
-                    elif last_side < 0:
-                        self.missed_out.add(tid)
-                        self.miss_out_count += 1
-                        print(f"⚠️ MISSED OUT - ID:{tid}")
+            # ✅ ID was moving IN but disappeared without counting
+            if tid in self.active_in_direction:
+                if tid not in self.permanent_missed_in:
+                    self.permanent_missed_in.add(tid)
+                    print(f"❌ PERMANENT MISS IN - ID:{tid} (disappeared)")
+                self.active_in_direction.discard(tid)
+            
+            # ✅ ID was moving OUT but disappeared without counting
+            if tid in self.active_out_direction:
+                if tid not in self.permanent_missed_out:
+                    self.permanent_missed_out.add(tid)
+                    print(f"❌ PERMANENT MISS OUT - ID:{tid} (disappeared)")
+                self.active_out_direction.discard(tid)
 
             # Cleanup
             self.hist.pop(tid, None)
             self.last_seen.pop(tid, None)
+
+        # ✅ Update miss counts (active + permanent)
+        self.miss_in_count = len(self.active_in_direction) + len(self.permanent_missed_in)
+        self.miss_out_count = len(self.active_out_direction) + len(self.permanent_missed_out)
 
     # ---------------- Reset Function ----------------
     def reset_all_data(self):
@@ -177,8 +176,10 @@ class ObjectCounter:
         self.last_seen.clear()
         self.crossed_ids.clear()
         self.counted.clear()
-        self.missed_in.clear()
-        self.missed_out.clear()
+        self.active_in_direction.clear()
+        self.active_out_direction.clear()
+        self.permanent_missed_in.clear()
+        self.permanent_missed_out.clear()
         self.in_count = 0
         self.out_count = 0
         self.miss_in_count = 0
@@ -230,68 +231,126 @@ class ObjectCounter:
                         s1 = self.side(px, py, *self.line_p1, *self.line_p2)
                         s2 = self.side(cx, cy, *self.line_p1, *self.line_p2)
 
+                        # ✅ Detect line crossing
                         if s1 * s2 < 0:
                             self.crossed_ids.add(tid)
 
-                            if tid not in self.counted:
-                                if s2 > 0:  # Going IN
+                            # ✅ Moving toward IN side (s2 > 0)
+                            if s2 > 0:
+                                if tid not in self.counted:
+                                    # Add to active IN tracking
+                                    self.active_in_direction.add(tid)
+                                    print(f"🔄 ACTIVE IN - ID:{tid} (crossing toward IN)")
+                                else:
+                                    # Already counted, just update count
                                     self.in_count += 1
-                                    print(f"✅ IN - ID:{tid}")
-                                else:  # Going OUT
+                                    # Remove from active tracking
+                                    self.active_in_direction.discard(tid)
+                                    print(f"✅ IN COUNTED - ID:{tid}")
+                            
+                            # ✅ Moving toward OUT side (s2 < 0)
+                            else:
+                                if tid not in self.counted:
+                                    # Add to active OUT tracking
+                                    self.active_out_direction.add(tid)
+                                    print(f"🔄 ACTIVE OUT - ID:{tid} (crossing toward OUT)")
+                                else:
+                                    # Already counted, just update count
                                     self.out_count += 1
-                                    print(f"✅ OUT - ID:{tid}")
-                                
-                                self.counted.add(tid)
+                                    # Remove from active tracking
+                                    self.active_out_direction.discard(tid)
+                                    print(f"✅ OUT COUNTED - ID:{tid}")
+                        
+                        # ✅ Check if object completed the crossing
+                        else:
+                            # Object is on IN side and was being tracked
+                            if s2 > 0 and tid in self.active_in_direction:
+                                if tid not in self.counted:
+                                    # Successfully completed IN crossing
+                                    self.in_count += 1
+                                    self.counted.add(tid)
+                                    self.active_in_direction.discard(tid)
+                                    print(f"✅ IN COMPLETED - ID:{tid}")
+                            
+                            # Object is on OUT side and was being tracked
+                            elif s2 < 0 and tid in self.active_out_direction:
+                                if tid not in self.counted:
+                                    # Successfully completed OUT crossing
+                                    self.out_count += 1
+                                    self.counted.add(tid)
+                                    self.active_out_direction.discard(tid)
+                                    print(f"✅ OUT COMPLETED - ID:{tid}")
 
                     self.hist[tid] = (cx, cy)
 
-                    # Draw bounding box
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    cv2.putText(frame, f"ID:{tid}", (x1, y1 - 10),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 200, 0), 2)
+                    # ✅ Draw bounding box with status
+                    color = (0, 255, 0)  # Default green
+                    status = ""
+                    
+                    if tid in self.active_in_direction:
+                        color = (0, 255, 255)  # Yellow for active IN
+                        status = " [→IN]"
+                    elif tid in self.active_out_direction:
+                        color = (255, 100, 255)  # Pink for active OUT
+                        status = " [→OUT]"
+                    elif tid in self.counted:
+                        color = (0, 255, 0)  # Green for counted
+                        status = " [✓]"
+                    
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                    cv2.putText(frame, f"ID:{tid}{status}", (x1, y1 - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
             if self.line_p1:
                 self.check_lost_ids()
 
-            # ================= DISPLAY (NO FALSE COUNT) =================
-
+            # ================= DISPLAY =================
             overlay = frame.copy()
-            cv2.rectangle(overlay, (0, 0), (1020, 100), (0, 0, 0), -1)
+            cv2.rectangle(overlay, (0, 0), (1020, 130), (0, 0, 0), -1)
             frame = cv2.addWeighted(overlay, 0.4, frame, 0.6, 0)
 
             # Title
-            cv2.putText(frame, "TRACKING SYSTEM", (15, 32),
+            cv2.putText(frame, "ACTIVE TRACKING SYSTEM", (15, 32),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (100, 200, 255), 3)
-            cv2.circle(frame, (250, 24), 7, (0, 255, 0), -1)
+            cv2.circle(frame, (290, 24), 7, (0, 255, 0), -1)
 
             # Main counts row
-            y_row = 70
+            y_row1 = 70
             font_size = 0.9
             thickness = 3
             
-            # IN
-            cv2.putText(frame, "IN:", (15, y_row),
+            # IN Count
+            cv2.putText(frame, "IN:", (15, y_row1),
                         cv2.FONT_HERSHEY_SIMPLEX, font_size, (0, 255, 150), thickness)
-            cv2.putText(frame, str(self.in_count), (90, y_row),
+            cv2.putText(frame, str(self.in_count), (90, y_row1),
                         cv2.FONT_HERSHEY_SIMPLEX, font_size, (255, 255, 255), thickness)
 
-            # OUT
-            cv2.putText(frame, "OUT:", (200, y_row),
+            # OUT Count
+            cv2.putText(frame, "OUT:", (200, y_row1),
                         cv2.FONT_HERSHEY_SIMPLEX, font_size, (100, 180, 255), thickness)
-            cv2.putText(frame, str(self.out_count), (300, y_row),
+            cv2.putText(frame, str(self.out_count), (300, y_row1),
                         cv2.FONT_HERSHEY_SIMPLEX, font_size, (255, 255, 255), thickness)
 
-            # MISS IN
-            cv2.putText(frame, "MISS IN:", (420, y_row),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.75, (100, 255, 255), 2)
-            cv2.putText(frame, str(self.miss_in_count), (580, y_row),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2)
+            # Second row - Active and Missed counts
+            y_row2 = 110
+            font_size_small = 0.65
+            thickness_small = 2
+            
+            # Active IN
+            cv2.putText(frame, f"Active→IN: {len(self.active_in_direction)}", (15, y_row2),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_size_small, (0, 255, 255), thickness_small)
 
-            # MISS OUT
-            cv2.putText(frame, "MISS OUT:", (680, y_row),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 100, 255), 2)
-            cv2.putText(frame, str(self.miss_out_count), (860, y_row),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2)
+            # Active OUT
+            cv2.putText(frame, f"Active→OUT: {len(self.active_out_direction)}", (200, y_row2),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_size_small, (255, 100, 255), thickness_small)
+
+            # Total MISS IN (active + permanent)
+            cv2.putText(frame, f"MISS IN: {self.miss_in_count}", (420, y_row2),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_size_small, (100, 255, 255), thickness_small)
+
+            # Total MISS OUT (active + permanent)
+            cv2.putText(frame, f"MISS OUT: {self.miss_out_count}", (640, y_row2),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_size_small, (255, 100, 255), thickness_small)
 
             if self.show:
                 cv2.imshow("ObjectCounter", frame)
