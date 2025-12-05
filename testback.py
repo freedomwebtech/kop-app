@@ -6,6 +6,7 @@ import time
 from datetime import datetime
 from imutils.video import VideoStream
 import numpy as np
+from shapely.geometry import Point, Polygon
 
 
 class ObjectCounter:
@@ -34,7 +35,7 @@ class ObjectCounter:
         # -------- Tracking --------
         self.hist = {}
         self.last_seen = {}
-        self.counted_ids = set()
+        self.counted_ids = []
 
         # -------- Counters --------
         self.in_count = 0
@@ -45,6 +46,10 @@ class ObjectCounter:
         self.region_initialized = False
         self.json_file = json_file
         self.load_region()
+        
+        # Shapely polygon for contains check
+        self.r_s = None
+        self.Point = Point
 
         self.frame_count = 0
 
@@ -116,6 +121,7 @@ class ObjectCounter:
         """Delete current region coordinates"""
         self.region = []
         self.region_initialized = False
+        self.r_s = None
         if os.path.exists(self.json_file):
             os.remove(self.json_file)
             print("🗑️  Polygon coordinates deleted!")
@@ -124,43 +130,55 @@ class ObjectCounter:
 
 
     def initialize_region(self):
-        """Convert region points to numpy array for polygon operations"""
+        """Convert region points to numpy array and Shapely polygon"""
         if len(self.region) >= 3:
             self.polygon_points = np.array(self.region, dtype=np.int32)
+            self.r_s = Polygon(self.region)
             self.region_initialized = True
+            
+            # Calculate region dimensions for direction detection
+            self.region_width = max(p[0] for p in self.region) - min(p[0] for p in self.region)
+            self.region_height = max(p[1] for p in self.region) - min(p[1] for p in self.region)
+            
+            print(f"✅ Polygon initialized: W={self.region_width}, H={self.region_height}")
+            if self.region_width < self.region_height:
+                print("   Vertical polygon: Right=IN, Left=OUT")
+            else:
+                print("   Horizontal polygon: Down=IN, Up=OUT")
         else:
             print("⚠️  Need at least 3 points to create a polygon")
             self.region_initialized = False
 
 
-    def is_inside(self, point):
-        """Check if a point is inside the polygon using OpenCV's pointPolygonTest"""
-        if not self.region_initialized:
-            return False
-        
-        result = cv2.pointPolygonTest(self.polygon_points, point, False)
-        return result >= 0  # >= 0 means inside or on the edge
-
-
-    # ================= COUNT LOGIC =================
-    def count_objects(self, curr, prev, tid):
-        if prev is None or tid in self.counted_ids:
+    # ================= COUNT LOGIC (POLYGON DIRECTION-BASED) =================
+    def count_objects(self, current_centroid, prev_position, track_id):
+        """Count objects based on movement direction within polygon"""
+        if prev_position is None or track_id in self.counted_ids:
             return
 
-        was = self.is_inside(prev)
-        now = self.is_inside(curr)
-
-        # Entering polygon = IN
-        if not was and now:
-            self.in_count += 1
-            self.counted_ids.add(tid)
-            print(f"✅ IN ID {tid} (entered polygon)")
-
-        # Exiting polygon = OUT
-        elif was and not now:
-            self.out_count += 1
-            self.counted_ids.add(tid)
-            print(f"✅ OUT ID {tid} (exited polygon)")
+        # Check if current position is inside the polygon
+        if len(self.region) > 2 and self.r_s.contains(self.Point(current_centroid)):
+            # Determine motion direction for vertical or horizontal polygons
+            if self.region_width < self.region_height:
+                # Vertical polygon: check horizontal movement
+                if current_centroid[0] > prev_position[0]:  # Moving right
+                    self.in_count += 1
+                    self.counted_ids.append(track_id)
+                    print(f"✅ IN ID {track_id} (moved right in vertical polygon)")
+                else:  # Moving left
+                    self.out_count += 1
+                    self.counted_ids.append(track_id)
+                    print(f"✅ OUT ID {track_id} (moved left in vertical polygon)")
+            else:
+                # Horizontal polygon: check vertical movement
+                if current_centroid[1] > prev_position[1]:  # Moving downward
+                    self.in_count += 1
+                    self.counted_ids.append(track_id)
+                    print(f"✅ IN ID {track_id} (moved down in horizontal polygon)")
+                else:  # Moving upward
+                    self.out_count += 1
+                    self.counted_ids.append(track_id)
+                    print(f"✅ OUT ID {track_id} (moved up in horizontal polygon)")
 
 
     # ================= RESET =================
@@ -189,7 +207,9 @@ class ObjectCounter:
         print("O = Reset counters")
         print("ESC = Exit")
         print("=" * 50)
-        print("✅ LOGIC: Entering polygon = IN, Exiting polygon = OUT\n")
+        print("✅ DIRECTION LOGIC:")
+        print("   - Vertical polygon: Right=IN, Left=OUT")
+        print("   - Horizontal polygon: Down=IN, Up=OUT\n")
 
         while True:
             if self.is_rtsp:
@@ -256,12 +276,17 @@ class ObjectCounter:
 
                     self.hist[tid] = (cx, cy)
 
-                    inside = self.is_inside((cx, cy))
+                    # Check if inside polygon using Shapely
+                    inside = self.r_s.contains(self.Point((cx, cy)))
                     color = (0,255,0) if inside else (0,0,255)
 
                     cv2.rectangle(frame, (x1,y1), (x2,y2), color, 2)
                     cv2.putText(frame, f"ID:{tid}", (x1,y1-5),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+                    
+                    # Draw trajectory line
+                    if tid in self.hist:
+                        cv2.line(frame, self.hist[tid], (cx, cy), color, 2)
 
             # HUD (IN / OUT)
             cv2.rectangle(frame, (0, 0), (1020, 50), (0, 0, 0), -1)
@@ -275,7 +300,8 @@ class ObjectCounter:
                 cv2.putText(frame, f"DRAWING MODE [{len(self.region)} points]", (450,35),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,255), 2)
             elif len(self.region) >= 3:
-                cv2.putText(frame, f"POLYGON: {len(self.region)} points", (450,35),
+                direction = "V" if self.region_width < self.region_height else "H"
+                cv2.putText(frame, f"POLYGON: {len(self.region)}pts ({direction})", (450,35),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,0), 2)
 
             if self.show:
@@ -287,6 +313,7 @@ class ObjectCounter:
                         self.point_selection_mode = True
                         self.region = []  # Clear existing points
                         self.region_initialized = False
+                        self.r_s = None
                         print("📍 Polygon drawing mode ON - Click points, press ENTER to finish")
                     
                 elif key == 13:  # ENTER key
