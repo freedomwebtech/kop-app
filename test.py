@@ -195,9 +195,9 @@ class ObjectCounter:
                 if not ret:
                     break
 
-            self.frame_count += 1
-            if self.frame_count % 3 != 0:
-                continue
+           # self.frame_count += 1
+           # if self.frame_count % 3 != 0:
+           #     continue
             
             frame = cv2.resize(frame, (640, 360))
 
