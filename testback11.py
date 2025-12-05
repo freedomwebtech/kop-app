@@ -2,15 +2,18 @@ import cv2
 from ultralytics import YOLO
 import json
 import os
+from imutils.video import VideoStream
 import time
 from datetime import datetime
-from imutils.video import VideoStream
 
+# ==========================================================
+#                     OBJECT COUNTER CLASS
+# ==========================================================
 
 class ObjectCounter:
     def __init__(self, source, model="best_float32.tflite",
                  classes_to_count=[0], show=True,
-                 json_file="region_coords.json"):
+                 json_file="line_coords_front.json"):
 
         self.source = source
         self.model = YOLO(model)
@@ -18,7 +21,7 @@ class ObjectCounter:
         self.classes = classes_to_count
         self.show = show
 
-        # -------- Video Source --------
+        # -------- RTSP or File --------
         if isinstance(source, str) and source.startswith("rtsp://"):
             self.cap = VideoStream(source).start()
             time.sleep(2.0)
@@ -27,197 +30,234 @@ class ObjectCounter:
             self.cap = cv2.VideoCapture(source)
             self.is_rtsp = False
 
-        # -------- Session --------
+        # -------- Session Data --------
+        self.session_start_time = datetime.now()
+        self.current_session_data = None
         self.start_new_session()
 
-        # -------- Tracking --------
+        # -------- Tracking Data --------
         self.hist = {}
         self.last_seen = {}
-        self.counted_ids = set()
+        self.crossed_ids = set()
+        self.counted = set()
+        
+        # Track which side object first appeared on
+        self.origin_side = {}
 
         # -------- Counters --------
         self.in_count = 0
         self.out_count = 0
 
-        # -------- Region --------
-        self.region = []
-        self.region_initialized = False
+        # ONLY MISSED
+        self.missed_in = set()
+        self.missed_out = set()
+        self.max_missing_frames = 40
+
+        # -------- Line --------
+        self.line_p1 = None
+        self.line_p2 = None
+        self.temp_points = []
         self.json_file = json_file
-        self.load_region()
+        self.load_line()
 
         self.frame_count = 0
 
-        # -------- Window --------
         cv2.namedWindow("ObjectCounter")
         cv2.setMouseCallback("ObjectCounter", self.mouse_event)
 
-
-    # ================= SESSION =================
+    # ---------------- Session Management ----------------
     def start_new_session(self):
-        self.session_start_time = datetime.now()
         self.current_session_data = {
-            "day": self.session_start_time.strftime('%A'),
-            "date": self.session_start_time.strftime('%Y-%m-%d'),
-            "start_time": self.session_start_time.strftime('%H:%M:%S'),
-            "end_time": None,
-            "in": 0,
-            "out": 0
+            'day': datetime.now().strftime('%A'),
+            'date': datetime.now().strftime('%Y-%m-%d'),
+            'start_time': datetime.now().strftime('%H:%M:%S'),
+            'end_time': None,
+            'in_count': 0,
+            'out_count': 0,
+            'missed_in': 0,
+            'missed_out': 0
         }
 
+    def end_current_session(self):
+        if self.current_session_data:
+            self.current_session_data['end_time'] = datetime.now().strftime('%H:%M:%S')
+            self.current_session_data['in_count'] = self.in_count
+            self.current_session_data['out_count'] = self.out_count
+            self.current_session_data['missed_in'] = len(self.missed_in)
+            self.current_session_data['missed_out'] = len(self.missed_out)
 
-    def end_session(self):
-        self.current_session_data["end_time"] = datetime.now().strftime('%H:%M:%S')
-        self.current_session_data["in"] = self.in_count
-        self.current_session_data["out"] = self.out_count
+    def print_session_summary(self):
+        print("\n" + "=" * 80)
+        print("                    SESSION SUMMARY")
+        print("=" * 80)
+        print(f"Day:           {self.current_session_data['day']}")
+        print(f"Date:          {self.current_session_data['date']}")
+        print(f"Start Time:    {self.current_session_data['start_time']}")
+        print(f"End Time:      {self.current_session_data['end_time']}")
+        print(f"IN Count:      {self.current_session_data['in_count']}")
+        print(f"OUT Count:     {self.current_session_data['out_count']}")
+        print(f"Missed IN:     {self.current_session_data['missed_in']}")
+        print(f"Missed OUT:    {self.current_session_data['missed_out']}")
+        print("=" * 80 + "\n")
 
-
-    def print_summary(self):
-        print("\n" + "=" * 50)
-        print("SESSION SUMMARY")
-        print("=" * 50)
-        for k, v in self.current_session_data.items():
-            print(f"{k:12}: {v}")
-        print("=" * 50)
-
-
-    # ================= REGION =================
+    # ---------------- Mouse ----------------
     def mouse_event(self, event, x, y, flags, param):
-        if event == cv2.EVENT_LBUTTONDOWN and len(self.region) < 4:
-            self.region.append((x, y))
-            print("Point:", x, y)
-            if len(self.region) == 4:
-                self.save_region()
-                print("✅ Rectangle Saved!")
+        if event == cv2.EVENT_LBUTTONDOWN:
+            self.temp_points.append((x, y))
+            if len(self.temp_points) == 2:
+                self.line_p1, self.line_p2 = self.temp_points
+                self.temp_points = []
+                self.save_line()
 
-
-    def save_region(self):
+    # ---------------- Save / Load Line ----------------
+    def save_line(self):
         with open(self.json_file, "w") as f:
-            json.dump({"region": self.region}, f)
+            json.dump({"line_p1": self.line_p1, "line_p2": self.line_p2}, f)
 
-
-    def load_region(self):
+    def load_line(self):
         if os.path.exists(self.json_file):
             with open(self.json_file) as f:
-                self.region = json.load(f)["region"]
+                data = json.load(f)
+                self.line_p1 = tuple(data["line_p1"])
+                self.line_p2 = tuple(data["line_p2"])
 
+    # ---------------- Utility ----------------
+    def side(self, px, py, x1, y1, x2, y2):
+        return (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
 
-    def initialize_region(self):
-        xs = [p[0] for p in self.region]
-        ys = [p[1] for p in self.region]
-        self.x1, self.x2 = min(xs), max(xs)
-        self.y1, self.y2 = min(ys), max(ys)
+    # ================= MISSED TRACK HANDLER =================
+    def check_lost_ids(self):
+        current = self.frame_count
+        lost = []
 
+        for tid, last in self.last_seen.items():
+            if current - last > self.max_missing_frames:
+                lost.append(tid)
 
-    def is_inside(self, point):
-        x, y = point
-        return self.x1 <= x <= self.x2 and self.y1 <= y <= self.y2
+        for tid in lost:
+            if tid in self.crossed_ids and tid not in self.counted:
+                if tid in self.hist:
+                    last_cx, last_cy = self.hist[tid]
+                    last_side = self.side(last_cx, last_cy, *self.line_p1, *self.line_p2)
+                    
+                    if last_side > 0:
+                        self.missed_in.add(tid)
+                        print(f"⚠️ MISSED IN - ID:{tid}")
+                    elif last_side < 0:
+                        self.missed_out.add(tid)
+                        print(f"⚠️ MISSED OUT - ID:{tid}")
 
+            self.hist.pop(tid, None)
+            self.last_seen.pop(tid, None)
+            self.origin_side.pop(tid, None)
 
-    # ================= COUNT =================
-    def count_objects(self, curr, prev, tid):
-        if prev is None or tid in self.counted_ids:
-            return
-
-        was = self.is_inside(prev)
-        now = self.is_inside(curr)
-
-        if not was and now:
-            self.in_count += 1
-            self.counted_ids.add(tid)
-            print(f"✅ ENTER ID {tid}")
-
-        elif was and not now:
-            self.out_count += 1
-            self.counted_ids.add(tid)
-            print(f"✅ EXIT ID {tid}")
-
-
-    # ================= RESET =================
-    def reset_all(self):
-        self.end_session()
-        self.print_summary()
-
-        self.in_count = 0
-        self.out_count = 0
+    # ---------------- Reset Function ----------------
+    def reset_all_data(self):
+        self.end_current_session()
+        self.print_session_summary()
+        
         self.hist.clear()
         self.last_seen.clear()
-        self.counted_ids.clear()
-
+        self.crossed_ids.clear()
+        self.counted.clear()
+        self.origin_side.clear()
+        self.missed_in.clear()
+        self.missed_out.clear()
+        self.in_count = 0
+        self.out_count = 0
+        
         self.start_new_session()
-        print("✅ RESET DONE")
+        print("✅ RESET DONE - New session started")
 
-
-    # ================= LOOP =================
+    # ---------------- Main Loop ----------------
     def run(self):
-        print("Draw rectangle using 4 clicks")
-        print("O = Reset | ESC = Exit")
+        print("RUNNING... Press O to Reset & Show Summary | ESC to Exit")
 
         while True:
             if self.is_rtsp:
                 frame = self.cap.read()
             else:
-                ok, frame = self.cap.read()
-                if not ok:
+                ret, frame = self.cap.read()
+                if not ret:
                     break
 
             self.frame_count += 1
-            if self.frame_count % 3 != 0:
-                continue
 
-            frame = cv2.resize(frame, (1020, 600))
+            # Resize frame for stable processing
+            frame = cv2.resize(frame, (640, 360))
 
-            for p in self.region:
-                cv2.circle(frame, p, 5, (0, 0, 255), -1)
+            # ============== DISPLAY IN/OUT COUNTERS ==============
+            cv2.putText(frame, f"IN  : {self.in_count}", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
 
-            if len(self.region) == 4 and not self.region_initialized:
-                self.initialize_region()
-                self.region_initialized = True
+            cv2.putText(frame, f"OUT : {self.out_count}", (10, 70),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
+            # ======================================================
 
-            if self.region_initialized:
-                cv2.rectangle(frame, (self.x1, self.y1), (self.x2, self.y2), (0,255,0), 2)
+            for pt in self.temp_points:
+                cv2.circle(frame, pt, 5, (0, 0, 255), -1)
 
-            results = self.model.track(frame, persist=True,
-                                       classes=self.classes,
-                                       conf=0.80)
+            if self.line_p1:
+                cv2.line(frame, self.line_p1, self.line_p2, (255, 255, 255), 2)
 
-            if results[0].boxes.id is not None and self.region_initialized:
+            results = self.model.track(frame, persist=True, classes=self.classes, conf=0.80)
+
+            if results[0].boxes.id is not None and self.line_p1:
                 ids = results[0].boxes.id.cpu().numpy().astype(int)
                 boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
 
                 for tid, box in zip(ids, boxes):
                     x1, y1, x2, y2 = box
-                    cx, cy = (x1+x2)//2, (y1+y2)//2
+                    cx = int((x1 + x2) / 2)
+                    cy = int((y1 + y2) / 2)
+
+                    self.last_seen[tid] = self.frame_count
+
+                    if tid not in self.hist:
+                        s_init = self.side(cx, cy, *self.line_p1, *self.line_p2)
+                        self.origin_side[tid] = "IN" if s_init < 0 else "OUT"
 
                     if tid in self.hist:
-                        self.count_objects((cx, cy), self.hist[tid], tid)
+                        px, py = self.hist[tid]
+                        s1 = self.side(px, py, *self.line_p1, *self.line_p2)
+                        s2 = self.side(cx, cy, *self.line_p1, *self.line_p2)
+
+                        if s1 * s2 < 0:
+                            self.crossed_ids.add(tid)
+
+                            if tid not in self.counted:
+                                if s2 > 0:
+                                    self.in_count += 1
+                                    print(f"✅ IN - ID:{tid}")
+                                else:
+                                    self.out_count += 1
+                                    print(f"✅ OUT - ID:{tid}")
+
+                                self.counted.add(tid)
 
                     self.hist[tid] = (cx, cy)
 
-                    inside = self.is_inside((cx, cy))
-                    color = (0,255,0) if inside else (0,0,255)
+                    origin_label = self.origin_side.get(tid, "?")
+                    
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    cv2.putText(frame, f"ID:{tid} [{origin_label}]", (x1, y1 - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 200, 0), 2)
 
-                    cv2.rectangle(frame, (x1,y1), (x2,y2), color, 2)
-                    cv2.putText(frame, f"ID:{tid}", (x1,y1-5),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-
-            # HUD (ONLY IN / OUT)
-            cv2.rectangle(frame, (0, 0), (1020, 50), (0, 0, 0), -1)
-            cv2.putText(frame, f"IN: {self.in_count}", (30,35),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
-            cv2.putText(frame, f"OUT: {self.out_count}", (220,35),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0,120,255), 2)
+            if self.line_p1:
+                self.check_lost_ids()
 
             if self.show:
                 cv2.imshow("ObjectCounter", frame)
-                key = cv2.waitKey(1)
+                key = cv2.waitKey(1) & 0xFF
 
-                if key == ord('o'):
-                    self.reset_all()
+                if key == ord('o') or key == ord('O'):
+                    self.reset_all_data()
+
                 elif key == 27:
                     break
 
-        self.end_session()
-        self.print_summary()
+        self.end_current_session()
+        self.print_session_summary()
 
         if self.is_rtsp:
             self.cap.stop()
@@ -227,10 +267,13 @@ class ObjectCounter:
         cv2.destroyAllWindows()
 
 
-# ================= RUN =================
+# ==========================================================
+#                        MAIN EXECUTION
+# ==========================================================
+
 if __name__ == "__main__":
     counter = ObjectCounter(
-        source="your_video.mp4",   # or RTSP
+        source="your_video.mp4",
         model="best_float32.tflite",
         classes_to_count=[0],
         show=True
