@@ -229,10 +229,10 @@ class ObjectCounter:
                 if not ok:
                     break
 
-            self.frame_count += 1
-            if self.frame_count % 3 != 0:
-                continue
-
+          #  self.frame_count += 1
+          #  if self.frame_count % 3 != 0:
+          #      continue
+            frame=cv2.resize(frame,(1020,600))
             # Draw existing line points
             for i, p in enumerate(self.region):
                 cv2.circle(frame, p, 8, (0, 0, 255), -1)
