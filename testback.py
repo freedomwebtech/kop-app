@@ -1,4 +1,3 @@
-
 import cv2
 from ultralytics import YOLO
 import json
@@ -7,6 +6,7 @@ from imutils.video import VideoStream
 import time
 from datetime import datetime
 from shapely.geometry import Point, Polygon
+import numpy as np
 
 # ==========================================================
 #                     OBJECT COUNTER CLASS
@@ -15,15 +15,13 @@ from shapely.geometry import Point, Polygon
 class ObjectCounter:
     def __init__(self, source, model="best_float32.tflite",
                  classes_to_count=[0], show=True,
-                 json_file="line_coords_front.json",
-                 use_polygon=False):
+                 json_file="polygon_coords.json"):
 
         self.source = source
         self.model = YOLO(model)
         self.names = self.model.names
         self.classes = classes_to_count
         self.show = show
-        self.use_polygon = use_polygon
 
         # -------- RTSP or File --------
         if isinstance(source, str) and source.startswith("rtsp://"):
@@ -57,9 +55,7 @@ class ObjectCounter:
         self.missed_out = set()
         self.max_missing_frames = 40
 
-        # -------- Line/Polygon --------
-        self.line_p1 = None
-        self.line_p2 = None
+        # -------- Polygon --------
         self.region = []  # For polygon points
         self.r_s = None   # Shapely polygon object
         self.Point = Point
@@ -114,27 +110,15 @@ class ObjectCounter:
     def mouse_event(self, event, x, y, flags, param):
         if event == cv2.EVENT_LBUTTONDOWN:
             self.temp_points.append((x, y))
-            
-            if self.use_polygon:
-                print(f"Polygon point {len(self.temp_points)}: ({x}, {y})")
-                # Right-click or 'P' to complete polygon (handled in run loop)
-            else:
-                if len(self.temp_points) == 2:
-                    self.line_p1, self.line_p2 = self.temp_points
-                    self.temp_points = []
-                    self.save_geometry()
+            print(f"Polygon point {len(self.temp_points)}: ({x}, {y})")
 
     # ---------------- Save / Load Geometry ----------------
     def save_geometry(self):
-        data = {}
-        if self.use_polygon and self.region:
+        if self.region:
             data = {"region": self.region, "type": "polygon"}
-        elif self.line_p1 and self.line_p2:
-            data = {"line_p1": self.line_p1, "line_p2": self.line_p2, "type": "line"}
-        
-        with open(self.json_file, "w") as f:
-            json.dump(data, f)
-        print(f"✅ Geometry saved to {self.json_file}")
+            with open(self.json_file, "w") as f:
+                json.dump(data, f)
+            print(f"✅ Geometry saved to {self.json_file}")
 
     def load_geometry(self):
         if os.path.exists(self.json_file):
@@ -144,16 +128,7 @@ class ObjectCounter:
                 if data.get("type") == "polygon" and "region" in data:
                     self.region = [tuple(p) for p in data["region"]]
                     self.r_s = Polygon(self.region)
-                    self.use_polygon = True
                     print(f"✅ Loaded polygon with {len(self.region)} points")
-                elif "line_p1" in data and "line_p2" in data:
-                    self.line_p1 = tuple(data["line_p1"])
-                    self.line_p2 = tuple(data["line_p2"])
-                    print("✅ Loaded counting line")
-
-    # ---------------- Utility ----------------
-    def side(self, px, py, x1, y1, x2, y2):
-        return (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
 
     # ================= MISSED TRACK HANDLER =================
     def check_lost_ids(self):
@@ -174,26 +149,15 @@ class ObjectCounter:
                 if tid in self.hist:
                     last_cx, last_cy = self.hist[tid]
                     
-                    if self.use_polygon:
-                        # For polygon, check last known position
-                        if self.r_s.contains(Point(last_cx, last_cy)):
-                            # Determine direction based on origin
-                            if self.origin_side.get(tid) == "IN":
-                                self.missed_out.add(tid)
-                                print(f"⚠️ MISSED OUT (Polygon) - ID:{tid}")
-                            else:
-                                self.missed_in.add(tid)
-                                print(f"⚠️ MISSED IN (Polygon) - ID:{tid}")
-                    else:
-                        # Line-based logic
-                        last_side = self.side(last_cx, last_cy, *self.line_p1, *self.line_p2)
-                        
-                        if last_side > 0:
-                            self.missed_in.add(tid)
-                            print(f"⚠️ MISSED IN - ID:{tid}")
-                        elif last_side < 0:
+                    # Check last known position in polygon
+                    if self.r_s and self.r_s.contains(Point(last_cx, last_cy)):
+                        # Determine direction based on origin
+                        if self.origin_side.get(tid) == "IN":
                             self.missed_out.add(tid)
-                            print(f"⚠️ MISSED OUT - ID:{tid}")
+                            print(f"⚠️ MISSED OUT (Polygon) - ID:{tid}")
+                        else:
+                            self.missed_in.add(tid)
+                            print(f"⚠️ MISSED IN (Polygon) - ID:{tid}")
 
             # Cleanup
             self.hist.pop(tid, None)
@@ -264,8 +228,7 @@ class ObjectCounter:
 
     # ---------------- Main Loop ----------------
     def run(self):
-        mode = "POLYGON MODE" if self.use_polygon else "LINE MODE"
-        print(f"RUNNING... [{mode}]")
+        print("RUNNING... [POLYGON MODE]")
         print("Press O to Reset & Show Summary | P to finish polygon | ESC to Exit")
 
         while True:
@@ -286,17 +249,15 @@ class ObjectCounter:
             for pt in self.temp_points:
                 cv2.circle(frame, pt, 5, (0, 0, 255), -1)
 
-            # Draw line or polygon
-            if self.use_polygon and self.region:
+            # Draw polygon
+            if self.region:
                 pts = np.array(self.region, np.int32).reshape((-1, 1, 2))
                 cv2.polylines(frame, [pts], True, (255, 255, 0), 2)
-            elif self.line_p1:
-                cv2.line(frame, self.line_p1, self.line_p2, (255, 255, 255), 2)
 
             results = self.model.track(
                 frame, persist=True, classes=self.classes, conf=0.80)
 
-            if results[0].boxes.id is not None and (self.line_p1 or self.region):
+            if results[0].boxes.id is not None and self.region:
                 ids = results[0].boxes.id.cpu().numpy().astype(int)
                 boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
 
@@ -308,35 +269,13 @@ class ObjectCounter:
                     self.last_seen[tid] = self.frame_count
 
                     if tid not in self.hist:
-                        if self.use_polygon:
-                            self.origin_side[tid] = "UNKNOWN"
-                        else:
-                            s_init = self.side(cx, cy, *self.line_p1, *self.line_p2)
-                            self.origin_side[tid] = "IN" if s_init < 0 else "OUT"
+                        self.origin_side[tid] = "UNKNOWN"
 
                     if tid in self.hist:
                         px, py = self.hist[tid]
                         
-                        if self.use_polygon:
-                            # Use polygon counting logic
-                            self.count_with_polygon(tid, cx, cy, px, py)
-                        else:
-                            # Use line counting logic
-                            s1 = self.side(px, py, *self.line_p1, *self.line_p2)
-                            s2 = self.side(cx, cy, *self.line_p1, *self.line_p2)
-
-                            if s1 * s2 < 0:
-                                self.crossed_ids.add(tid)
-
-                                if tid not in self.counted:
-                                    if s2 > 0:
-                                        self.in_count += 1
-                                        print(f"✅ IN - ID:{tid}")
-                                    else:
-                                        self.out_count += 1
-                                        print(f"✅ OUT - ID:{tid}")
-
-                                    self.counted.add(tid)
+                        # Use polygon counting logic
+                        self.count_with_polygon(tid, cx, cy, px, py)
 
                     self.hist[tid] = (cx, cy)
 
@@ -346,7 +285,7 @@ class ObjectCounter:
                     cv2.putText(frame, f"ID:{tid} [{origin_label}]", (x1, y1 - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 200, 0), 2)
 
-            if self.line_p1 or self.region:
+            if self.region:
                 self.check_lost_ids()
 
             # Display counts
@@ -363,7 +302,7 @@ class ObjectCounter:
                     self.reset_all_data()
                 
                 elif key == ord('p') or key == ord('P'):
-                    if self.use_polygon and len(self.temp_points) >= 3:
+                    if len(self.temp_points) >= 3:
                         self.region = self.temp_points.copy()
                         self.r_s = Polygon(self.region)
                         self.temp_points = []
@@ -389,22 +328,10 @@ class ObjectCounter:
 # ==========================================================
 
 if __name__ == "__main__":
-    # For line-based counting
     counter = ObjectCounter(
         source="your_video.mp4",
         model="best_float32.tflite",
         classes_to_count=[0],
-        show=True,
-        use_polygon=False  # Set to True for polygon mode
+        show=True
     )
     counter.run()
-    
-    # For polygon-based counting
-    # counter = ObjectCounter(
-    #     source="your_video.mp4",
-    #     model="best_float32.tflite",
-    #     classes_to_count=[0],
-    #     show=True,
-    #     use_polygon=True
-    # )
-    # counter.run()
