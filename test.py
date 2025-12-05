@@ -75,11 +75,11 @@ class ObjectCounter:
         self.crossed_ids = set()
         self.counted = set()
         
-        # ✅ Store color detected at crossing point
+        # Store color detected at crossing point
         self.color_at_crossing = {}
         
-        # ✅ Track which side object first appeared on
-        self.origin_side = {}  # tid -> "IN" or "OUT"
+        # Track which side object first appeared on
+        self.origin_side = {}
 
         # -------- Counters --------
         self.in_count = 0
@@ -88,7 +88,7 @@ class ObjectCounter:
         self.color_in_count = {}
         self.color_out_count = {}
 
-        # ✅ ONLY IN/OUT MISSED (NO CROSS)
+        # ✅ ONLY IN/OUT MISSED
         self.missed_in = set()
         self.missed_out = set()
         self.max_missing_frames = 40
@@ -187,14 +187,11 @@ class ObjectCounter:
     def side(self, px, py, x1, y1, x2, y2):
         return (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
 
-    # ================= FIXED MISSED TRACK HANDLER (NO CROSS) =================
+    # ================= MISSED TRACK HANDLER (ONLY IN/OUT) =================
     def check_lost_ids(self):
         """
         Check for objects that disappeared without being counted.
-        
-        ✅ ONLY IN/OUT MISSED (CROSS LOGIC REMOVED):
-        - If crossed line & ended on IN side (s2 > 0) → Missed IN
-        - If crossed line & ended on OUT side (s2 < 0) → Missed OUT  
+        Only tracks MISSED IN and MISSED OUT.
         """
         current = self.frame_count
         lost = []
@@ -206,27 +203,19 @@ class ObjectCounter:
         for tid in lost:
             # Only check crossed objects that weren't counted
             if tid in self.crossed_ids and tid not in self.counted:
-                # Get last known position to determine expected direction
                 if tid in self.hist:
                     last_cx, last_cy = self.hist[tid]
                     last_side = self.side(last_cx, last_cy, *self.line_p1, *self.line_p2)
                     
-                    # IN logic: Should have ended on positive side (s2 > 0)
+                    # IN logic: ended on positive side
                     if last_side > 0:
                         self.missed_in.add(tid)
-                        print(f"⚠️ MISSED IN - ID:{tid} (crossed line, ended on IN side, not counted)")
+                        print(f"⚠️ MISSED IN - ID:{tid}")
                     
-                    # OUT logic: Should have ended on negative side (s2 < 0)  
+                    # OUT logic: ended on negative side
                     elif last_side < 0:
                         self.missed_out.add(tid)
-                        print(f"⚠️ MISSED OUT - ID:{tid} (crossed line, ended on OUT side, not counted)")
-                else:
-                    # Fallback to origin if no position data
-                    origin = self.origin_side.get(tid, "UNKNOWN")
-                    if origin == "IN":
-                        self.missed_in.add(tid)
-                    elif origin == "OUT":
-                        self.missed_out.add(tid)
+                        print(f"⚠️ MISSED OUT - ID:{tid}")
 
             # Cleanup
             self.hist.pop(tid, None)
@@ -237,13 +226,9 @@ class ObjectCounter:
     # ---------------- Reset Function ----------------
     def reset_all_data(self):
         """Reset all tracking data and start new session"""
-        # End current session before resetting
         self.end_current_session()
-        
-        # Print session summary to console
         self.print_session_summary()
         
-        # Reset counters
         self.hist.clear()
         self.last_seen.clear()
         self.crossed_ids.clear()
@@ -257,7 +242,6 @@ class ObjectCounter:
         self.in_count = 0
         self.out_count = 0
         
-        # Start new session
         self.start_new_session()
         print("✅ RESET DONE - New session started")
 
@@ -300,7 +284,6 @@ class ObjectCounter:
 
                     self.last_seen[tid] = self.frame_count
 
-                    # ✅ Record origin side when first seen
                     if tid not in self.hist:
                         s_init = self.side(cx, cy, *self.line_p1, *self.line_p2)
                         if s_init < 0:
@@ -313,14 +296,11 @@ class ObjectCounter:
                         s1 = self.side(px, py, *self.line_p1, *self.line_p2)
                         s2 = self.side(cx, cy, *self.line_p1, *self.line_p2)
 
-                        # ✅ Detect color at appropriate position based on direction
-                        if s1 * s2 < 0:  # Crossed the line
+                        if s1 * s2 < 0:
                             self.crossed_ids.add(tid)
 
                             if tid not in self.counted:
-                                # Determine direction
-                                if s2 > 0:  # Going IN (positive side)
-                                    # For IN: Use color BEFORE crossing (previous position)
+                                if s2 > 0:
                                     if tid in self.color_at_crossing:
                                         color_name = self.color_at_crossing[tid]
                                     else:
@@ -330,8 +310,7 @@ class ObjectCounter:
                                     self.color_in_count[color_name] = self.color_in_count.get(color_name, 0) + 1
                                     print(f"✅ IN - ID:{tid} Color:{color_name}")
                                     
-                                else:  # Going OUT (negative side)
-                                    # For OUT: Detect color AFTER crossing (current position)
+                                else:
                                     color_name = detect_box_color(frame, box)
                                     
                                     self.out_count += 1
@@ -340,14 +319,12 @@ class ObjectCounter:
 
                                 self.counted.add(tid)
                         
-                        # ✅ Store color for objects on negative side (before line for IN direction)
                         if s2 < 0:
                             color_name = detect_box_color(frame, box)
                             self.color_at_crossing[tid] = color_name
 
                     self.hist[tid] = (cx, cy)
 
-                    # Display current detected color and origin
                     display_color = self.color_at_crossing.get(tid, detect_box_color(frame, box))
                     origin_label = self.origin_side.get(tid, "?")
                     
@@ -355,40 +332,33 @@ class ObjectCounter:
                     cv2.putText(frame, f"{display_color} [{origin_label}]", (x1, y1 - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 200, 0), 2)
 
-            # ✅ MISSED CHECK ACTIVE (NO CROSS)
             if self.line_p1:
                 self.check_lost_ids()
 
-            # ================= DISPLAY WITHOUT CROSS =================
+            # ================= DISPLAY (NO CROSS) =================
 
-            # Main overlay panel
             overlay = frame.copy()
             cv2.rectangle(overlay, (0, 0), (1020, 160), (0, 0, 0), -1)
             frame = cv2.addWeighted(overlay, 0.35, frame, 0.65, 0)
 
-            # --------- TITLE BAR ---------
             cv2.putText(frame, "TRACKING SYSTEM", (15, 32),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (100, 200, 255), 3)
             cv2.circle(frame, (250, 24), 7, (0, 255, 0), -1)
 
-            # --------- TOTAL COUNTS ROW ---------
             y_row1 = 65
             font_large = 0.8
             thickness_bold = 3
             
-            # Total IN
             cv2.putText(frame, "IN:", (15, y_row1),
                         cv2.FONT_HERSHEY_SIMPLEX, font_large, (0, 255, 150), thickness_bold)
             cv2.putText(frame, str(self.in_count), (75, y_row1),
                         cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
 
-            # Total OUT
             cv2.putText(frame, "OUT:", (150, y_row1),
                         cv2.FONT_HERSHEY_SIMPLEX, font_large, (100, 180, 255), thickness_bold)
             cv2.putText(frame, str(self.out_count), (230, y_row1),
                         cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
 
-            # Missed counts (NO CROSS)
             cv2.putText(frame, "MISS IN:", (320, y_row1),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (100, 255, 255), 2)
             cv2.putText(frame, str(len(self.missed_in)), (450, y_row1),
@@ -399,10 +369,8 @@ class ObjectCounter:
             cv2.putText(frame, str(len(self.missed_out)), (680, y_row1),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
-            # --------- SEPARATOR LINE ---------
             cv2.line(frame, (10, 85), (1010, 85), (100, 100, 100), 2)
 
-            # --------- BROWN BOX COUNTS ROW ---------
             y_row2 = 118
             brown_in = self.color_in_count.get("Brown", 0)
             brown_out = self.color_out_count.get("Brown", 0)
@@ -420,7 +388,6 @@ class ObjectCounter:
             cv2.putText(frame, str(brown_out), (570, y_row2),
                         cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
 
-            # --------- WHITE BOX COUNTS ROW ---------
             y_row3 = 150
             white_in = self.color_in_count.get("White", 0)
             white_out = self.color_out_count.get("White", 0)
@@ -448,7 +415,6 @@ class ObjectCounter:
                 elif key == 27:
                     break
 
-        # Print final session summary before exit
         self.end_current_session()
         self.print_session_summary()
 
@@ -465,9 +431,8 @@ class ObjectCounter:
 # ==========================================================
 
 if __name__ == "__main__":
-    # Example usage:
     counter = ObjectCounter(
-        source="your_video.mp4",  # or 0 for webcam, or "rtsp://..."
+        source="your_video.mp4",
         model="best_float32.tflite",
         classes_to_count=[0],
         show=True
