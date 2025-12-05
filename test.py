@@ -341,33 +341,33 @@ class ObjectCounter:
             cv2.rectangle(overlay, (0, 0), (1020, 160), (0, 0, 0), -1)
             frame = cv2.addWeighted(overlay, 0.35, frame, 0.65, 0)
 
-            cv2.putText(frame, "TRACKING SYSTEM", (15, 32),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (100, 200, 255), 3)
+           # cv2.putText(frame, "TRACKING SYSTEM", (15, 32),
+           #             cv2.FONT_HERSHEY_SIMPLEX, 0.8, (100, 200, 255), 3)
             cv2.circle(frame, (250, 24), 7, (0, 255, 0), -1)
 
             y_row1 = 65
             font_large = 0.8
             thickness_bold = 3
             
-            cv2.putText(frame, "IN:", (15, y_row1),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (0, 255, 150), thickness_bold)
-            cv2.putText(frame, str(self.in_count), (75, y_row1),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
+           # cv2.putText(frame, "IN:", (15, y_row1),
+           #             cv2.FONT_HERSHEY_SIMPLEX, font_large, (0, 255, 150), thickness_bold)
+           # cv2.putText(frame, str(self.in_count), (75, y_row1),
+           #             cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
 
-            cv2.putText(frame, "OUT:", (150, y_row1),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (100, 180, 255), thickness_bold)
-            cv2.putText(frame, str(self.out_count), (230, y_row1),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
+           # cv2.putText(frame, "OUT:", (150, y_row1),
+           #             cv2.FONT_HERSHEY_SIMPLEX, font_large, (100, 180, 255), thickness_bold)
+           # cv2.putText(frame, str(self.out_count), (230, y_row1),
+            #            cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
 
-            cv2.putText(frame, "MISS IN:", (320, y_row1),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (100, 255, 255), 2)
-            cv2.putText(frame, str(len(self.missed_in)), (450, y_row1),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            #cv2.putText(frame, "MISS IN:", (320, y_row1),
+            #            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (100, 255, 255), 2)
+            #cv2.putText(frame, str(len(self.missed_in)), (450, y_row1),
+            #            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
-            cv2.putText(frame, "MISS OUT:", (530, y_row1),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 100, 255), 2)
-            cv2.putText(frame, str(len(self.missed_out)), (680, y_row1),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            #cv2.putText(frame, "MISS OUT:", (530, y_row1),
+            #            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 100, 255), 2)
+            #cv2.putText(frame, str(len(self.missed_out)), (680, y_row1),
+             #           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
             cv2.line(frame, (10, 85), (1010, 85), (100, 100, 100), 2)
 
@@ -378,15 +378,15 @@ class ObjectCounter:
             cv2.rectangle(frame, (15, y_row2 - 25), (50, y_row2 - 5), (19, 69, 139), -1)
             cv2.rectangle(frame, (15, y_row2 - 25), (50, y_row2 - 5), (255, 255, 255), 2)
             
-            cv2.putText(frame, "BROWN IN:", (60, y_row2),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (100, 150, 255), thickness_bold)
-            cv2.putText(frame, str(brown_in), (240, y_row2),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
+            #cv2.putText(frame, "BROWN IN:", (60, y_row2),
+             #           cv2.FONT_HERSHEY_SIMPLEX, font_large, (100, 150, 255), thickness_bold)
+            #cv2.putText(frame, str(brown_in), (240, y_row2),
+            #            cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
 
-            cv2.putText(frame, "BROWN OUT:", (350, y_row2),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (100, 150, 255), thickness_bold)
-            cv2.putText(frame, str(brown_out), (570, y_row2),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
+            #cv2.putText(frame, "BROWN OUT:", (350, y_row2),
+            #            cv2.FONT_HERSHEY_SIMPLEX, font_large, (100, 150, 255), thickness_bold)
+            #cv2.putText(frame, str(brown_out), (570, y_row2),
+            #            cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
 
             y_row3 = 150
             white_in = self.color_in_count.get("White", 0)
@@ -395,15 +395,15 @@ class ObjectCounter:
             cv2.rectangle(frame, (15, y_row3 - 25), (50, y_row3 - 5), (245, 245, 245), -1)
             cv2.rectangle(frame, (15, y_row3 - 25), (50, y_row3 - 5), (100, 100, 100), 2)
             
-            cv2.putText(frame, "WHITE IN:", (60, y_row3),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (200, 255, 200), thickness_bold)
-            cv2.putText(frame, str(white_in), (240, y_row3),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
+            #cv2.putText(frame, "WHITE IN:", (60, y_row3),
+            #            cv2.FONT_HERSHEY_SIMPLEX, font_large, (200, 255, 200), thickness_bold)
+            #cv2.putText(frame, str(white_in), (240, y_row3),
+            #            cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
 
-            cv2.putText(frame, "WHITE OUT:", (350, y_row3),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (200, 255, 200), thickness_bold)
-            cv2.putText(frame, str(white_out), (570, y_row3),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
+            #cv2.putText(frame, "WHITE OUT:", (350, y_row3),
+            #            cv2.FONT_HERSHEY_SIMPLEX, font_large, (200, 255, 200), thickness_bold)
+            #cv2.putText(frame, str(white_out), (570, y_row3),
+            #            cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
 
             if self.show:
                 cv2.imshow("ObjectCounter", frame)
