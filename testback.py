@@ -1,4 +1,3 @@
-
 import cv2
 from ultralytics import YOLO
 import json
@@ -114,7 +113,7 @@ class ObjectCounter:
         return self.x1 <= x <= self.x2 and self.y1 <= y <= self.y2
 
 
-    # ================= COUNT =================
+    # ================= COUNT (REVERSED LOGIC) =================
     def count_objects(self, curr, prev, tid):
         if prev is None or tid in self.counted_ids:
             return
@@ -122,15 +121,17 @@ class ObjectCounter:
         was = self.is_inside(prev)
         now = self.is_inside(curr)
 
+        # REVERSED: Entering region = OUT
         if not was and now:
-            self.in_count += 1
-            self.counted_ids.add(tid)
-            print(f"✅ ENTER ID {tid}")
-
-        elif was and not now:
             self.out_count += 1
             self.counted_ids.add(tid)
-            print(f"✅ EXIT ID {tid}")
+            print(f"✅ OUT ID {tid} (entered region)")
+
+        # REVERSED: Exiting region = IN
+        elif was and not now:
+            self.in_count += 1
+            self.counted_ids.add(tid)
+            print(f"✅ IN ID {tid} (exited region)")
 
 
     # ================= RESET =================
@@ -152,6 +153,7 @@ class ObjectCounter:
     def run(self):
         print("Draw rectangle using 4 clicks")
         print("O = Reset | ESC = Exit")
+        print("⚠️  REVERSED LOGIC: Entering region = OUT, Exiting region = IN")
 
         while True:
             if self.is_rtsp:
