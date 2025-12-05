@@ -1,210 +1,98 @@
 import cv2
-import json
-import os
+import numpy as np
 from ultralytics import YOLO
 from collections import defaultdict
-import time
+from bytetrack import ByteTrack
 
 class ObjectCounter:
-    def __init__(self, source, model="yolov8n.pt",
-                 classes_to_count=[0], show=True,
-                 json_file="line_coords.json"):
-
+    def __init__(self, source, model, classes_to_count=[0], show=True):
         self.source = source
         self.model = YOLO(model)
-        self.classes = classes_to_count
+        self.classes_to_count = classes_to_count
         self.show = show
 
-        self.json_file = json_file
+        # Line for in/out count
+        self.line_y = 300  # change if needed
+        self.in_count = 0
+        self.out_count = 0
 
-        # video / rtsp
-        if isinstance(source, str) and source.startswith("rtsp://"):
-            from imutils.video import VideoStream
-            self.cap = VideoStream(source).start()
-            time.sleep(2.0)
-            self.is_rtsp = True
-        else:
-            self.cap = cv2.VideoCapture(source)
-            self.is_rtsp = False
+        # Tracker
+        self.tracker = ByteTrack()
 
-        # line points
-        self.line_p1 = None
-        self.line_p2 = None
-        self.temp_points = []
+        # Store previous positions
+        self.track_history = defaultdict(lambda: [])
 
-        self.load_line()
+    def detect_and_track(self, frame):
+        results = self.model(frame, verbose=False)[0]
+
+        detections = []
+        for box in results.boxes:
+            cls = int(box.cls)
+            if cls in self.classes_to_count:
+                x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                conf = float(box.conf)
+                detections.append([x1, y1, x2, y2, conf, cls])
 
         # tracking
-        self.hist = {}
-        self.origin_side = {}
-        self.crossed_ids = set()
-        self.counted = set()
-        self.last_seen = defaultdict(int)
-        self.frame_count = 0
+        tracks = self.tracker.update_tracks(detections, frame=frame)
 
-        self.in_count = 0
-        self.out_count = 0
+        for track in tracks:
+            if not track.is_confirmed():
+                continue
 
-        cv2.namedWindow("ObjectCounter")
-        cv2.setMouseCallback("ObjectCounter", self.mouse_event)
+            track_id = track.track_id
+            l, t, r, b = track.tlbr
+            cx = int((l + r) / 2)
+            cy = int((t + b) / 2)
 
-    # -----------------------------------------
-    # Mouse click to select 2 points for line
-    # -----------------------------------------
-    def mouse_event(self, event, x, y, flags, param):
-        if event == cv2.EVENT_LBUTTONDOWN:
-            self.temp_points.append((x, y))
-            if len(self.temp_points) == 2:
-                self.line_p1, self.line_p2 = self.temp_points
-                self.temp_points = []
-                self.save_line()
-                print(f"Line Set: {self.line_p1} -> {self.line_p2}")
+            # Save center history
+            self.track_history[track_id].append((cx, cy))
 
-    def save_line(self):
-        with open(self.json_file, "w") as f:
-            json.dump({"p1": self.line_p1, "p2": self.line_p2}, f)
+            # Check crossing
+            if len(self.track_history[track_id]) > 2:
+                y_prev = self.track_history[track_id][-2][1]
+                y_now = cy
 
-    def load_line(self):
-        if os.path.exists(self.json_file):
-            with open(self.json_file) as f:
-                d = json.load(f)
-                self.line_p1 = tuple(d["p1"])
-                self.line_p2 = tuple(d["p2"])
+                if y_prev < self.line_y and y_now >= self.line_y:
+                    self.in_count += 1
 
-    # -----------------------------------------
-    # Side detection
-    # -----------------------------------------
-    def side(self, px, py, x1, y1, x2, y2):
-        return (px - x1) * (y2 - y1) - (py - y1) * (x2 - x1)
+                if y_prev > self.line_y and y_now <= self.line_y:
+                    self.out_count += 1
 
-    # -----------------------------------------
-    # Remove lost IDs
-    # -----------------------------------------
-    def check_lost_ids(self, max_lost=40):
-        lost = []
-        for tid in list(self.last_seen.keys()):
-            if self.frame_count - self.last_seen[tid] > max_lost:
-                lost.append(tid)
+            # Draw tracking box
+            cv2.rectangle(frame, (int(l), int(t)), (int(r), int(b)), (0,255,0), 2)
+            cv2.putText(frame, f"ID {track_id}", (int(l), int(t)-5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
 
-        for tid in lost:
-            self.last_seen.pop(tid, None)
-            self.hist.pop(tid, None)
-            self.origin_side.pop(tid, None)
-            if tid in self.counted:
-                self.counted.remove(tid)
+            # Draw center dot
+            cv2.circle(frame, (cx, cy), 4, (0, 0, 255), -1)
 
-    # -----------------------------------------
-    # Reset all
-    # -----------------------------------------
-    def reset_all_data(self):
-        print("\n--- RESET DONE ---\n")
-        self.hist.clear()
-        self.origin_side.clear()
-        self.counted.clear()
-        self.crossed_ids.clear()
-        self.last_seen.clear()
-        self.in_count = 0
-        self.out_count = 0
+        return frame
 
-    # -----------------------------------------
-    # MAIN LOOP
-    # -----------------------------------------
     def run(self):
-        print("Press O = RESET | ESC = EXIT")
+        cap = cv2.VideoCapture(self.source)
 
         while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-            # read frame
-            if self.is_rtsp:
-                frame = self.cap.read()
-            else:
-                ret, frame = self.cap.read()
-                if not ret:
-                    break
+            frame = self.detect_and_track(frame)
 
-            self.frame_count += 1
+            # Draw IN/OUT line
+            cv2.line(frame, (0, self.line_y), (frame.shape[1], self.line_y), (0, 0, 255), 2)
 
-            # fixed resize
-            frame = cv2.resize(frame, (640, 360))
+            # Display counts
+            cv2.putText(frame, f"IN: {self.in_count}", (20, 40),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 3)
+            cv2.putText(frame, f"OUT: {self.out_count}", (20, 80),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 3)
 
-            # display IN / OUT
-            cv2.putText(frame, f"IN  : {self.in_count}", (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
-            cv2.putText(frame, f"OUT : {self.out_count}", (10, 70),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
-
-            # temp points while selecting
-            for pt in self.temp_points:
-                cv2.circle(frame, pt, 5, (0, 0, 255), -1)
-
-            # draw final line
-            if self.line_p1:
-                cv2.line(frame, self.line_p1, self.line_p2, (255, 255, 255), 2)
-
-            # run YOLO tracking
-            results = self.model.track(frame, persist=True, classes=self.classes, conf=0.70)
-
-            if results and results[0].boxes.id is not None and self.line_p1:
-
-                ids = results[0].boxes.id.cpu().numpy().astype(int)
-                boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
-
-                for tid, box in zip(ids, boxes):
-                    x1, y1, x2, y2 = box
-                    cx = (x1 + x2) // 2
-                    cy = (y1 + y2) // 2
-
-                    self.last_seen[tid] = self.frame_count
-
-                    # first time
-                    if tid not in self.hist:
-                        s_init = self.side(cx, cy, *self.line_p1, *self.line_p2)
-                        self.origin_side[tid] = "IN" if s_init < 0 else "OUT"
-
-                    # check crossing
-                    if tid in self.hist:
-                        px, py = self.hist[tid]
-                        s1 = self.side(px, py, *self.line_p1, *self.line_p2)
-                        s2 = self.side(cx, cy, *self.line_p1, *self.line_p2)
-
-                        if s1 * s2 < 0 and tid not in self.counted:
-                            if s2 > 0:
-                                self.in_count += 1
-                                print(f"IN +1 (ID:{tid})")
-                            else:
-                                self.out_count += 1
-                                print(f"OUT +1 (ID:{tid})")
-
-                            self.counted.add(tid)
-
-                    # save last center
-                    self.hist[tid] = (cx, cy)
-
-                    # draw box
-                    cv2.rectangle(frame, (x1, y1), (x2, y2),
-                                  (0, 255, 0), 2)
-                    cv2.putText(frame, f"ID:{tid}",
-                                (x1, y1 - 5),
-                                cv2.FONT_HERSHEY_SIMPLEX,
-                                0.6, (255, 200, 0), 2)
-
-            # cleanup
-            self.check_lost_ids()
-
-            # show window
             if self.show:
-                cv2.imshow("ObjectCounter", frame)
-                key = cv2.waitKey(1) & 0xFF
+                cv2.imshow("Counter", frame)
 
-                if key == ord('o'):
-                    self.reset_all_data()
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
 
-                if key == 27:
-                    break
-
-        if self.is_rtsp:
-            self.cap.stop()
-        else:
-            self.cap.release()
-
+        cap.release()
         cv2.destroyAllWindows()
