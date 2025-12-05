@@ -197,7 +197,7 @@ class ObjectCounter:
             self.frame_count += 1
             if self.frame_count % 3 != 0:
                 continue
-
+            frame = cv2.resize(frame, (640, 360))
             #frame = cv2.resize(frame, (1020, 600))
 
             for pt in self.temp_points:
