@@ -5,6 +5,7 @@ import os
 import time
 from datetime import datetime
 from imutils.video import VideoStream
+import numpy as np
 
 
 class ObjectCounter:
@@ -39,7 +40,7 @@ class ObjectCounter:
         self.in_count = 0
         self.out_count = 0
 
-        # -------- Region --------
+        # -------- Polygon Region --------
         self.region = []
         self.region_initialized = False
         self.json_file = json_file
@@ -84,7 +85,7 @@ class ObjectCounter:
         print("=" * 50)
 
 
-    # ================= REGION =================
+    # ================= POLYGON REGION =================
     def mouse_event(self, event, x, y, flags, param):
         # Track mouse position for visual feedback
         if event == cv2.EVENT_MOUSEMOVE:
@@ -92,27 +93,23 @@ class ObjectCounter:
         
         # Only allow clicks when in point selection mode
         if event == cv2.EVENT_LBUTTONDOWN and self.point_selection_mode:
-            if len(self.region) < 4:
-                self.region.append((x, y))
-                print(f"Point {len(self.region)}: ({x}, {y})")
-                
-                if len(self.region) == 4:
-                    self.save_region()
-                    self.point_selection_mode = False
-                    self.region_initialized = False  # Force re-initialization
-                    print("✅ Rectangle Saved! Press 'P' again to modify.")
+            self.region.append((x, y))
+            print(f"Point {len(self.region)}: ({x}, {y})")
 
 
     def save_region(self):
+        """Save polygon points to JSON file"""
         with open(self.json_file, "w") as f:
             json.dump({"region": self.region}, f)
+        print(f"✅ Polygon with {len(self.region)} points saved!")
 
 
     def load_region(self):
+        """Load polygon points from JSON file"""
         if os.path.exists(self.json_file):
             with open(self.json_file) as f:
                 self.region = json.load(f)["region"]
-                print(f"✅ Loaded region from {self.json_file}")
+                print(f"✅ Loaded polygon with {len(self.region)} points from {self.json_file}")
 
 
     def delete_region(self):
@@ -121,24 +118,31 @@ class ObjectCounter:
         self.region_initialized = False
         if os.path.exists(self.json_file):
             os.remove(self.json_file)
-            print("🗑️  Region coordinates deleted!")
+            print("🗑️  Polygon coordinates deleted!")
         else:
-            print("🗑️  No saved region to delete")
+            print("🗑️  No saved polygon to delete")
 
 
     def initialize_region(self):
-        xs = [p[0] for p in self.region]
-        ys = [p[1] for p in self.region]
-        self.x1, self.x2 = min(xs), max(xs)
-        self.y1, self.y2 = min(ys), max(ys)
+        """Convert region points to numpy array for polygon operations"""
+        if len(self.region) >= 3:
+            self.polygon_points = np.array(self.region, dtype=np.int32)
+            self.region_initialized = True
+        else:
+            print("⚠️  Need at least 3 points to create a polygon")
+            self.region_initialized = False
 
 
     def is_inside(self, point):
-        x, y = point
-        return self.x1 <= x <= self.x2 and self.y1 <= y <= self.y2
+        """Check if a point is inside the polygon using OpenCV's pointPolygonTest"""
+        if not self.region_initialized:
+            return False
+        
+        result = cv2.pointPolygonTest(self.polygon_points, point, False)
+        return result >= 0  # >= 0 means inside or on the edge
 
 
-    # ================= COUNT (FIXED LOGIC) =================
+    # ================= COUNT LOGIC =================
     def count_objects(self, curr, prev, tid):
         if prev is None or tid in self.counted_ids:
             return
@@ -146,17 +150,17 @@ class ObjectCounter:
         was = self.is_inside(prev)
         now = self.is_inside(curr)
 
-        # CORRECT: Entering region = IN
+        # Entering polygon = IN
         if not was and now:
             self.in_count += 1
             self.counted_ids.add(tid)
-            print(f"✅ IN ID {tid} (entered region)")
+            print(f"✅ IN ID {tid} (entered polygon)")
 
-        # CORRECT: Exiting region = OUT
+        # Exiting polygon = OUT
         elif was and not now:
             self.out_count += 1
             self.counted_ids.add(tid)
-            print(f"✅ OUT ID {tid} (exited region)")
+            print(f"✅ OUT ID {tid} (exited polygon)")
 
 
     # ================= RESET =================
@@ -179,12 +183,13 @@ class ObjectCounter:
         print("\n" + "=" * 50)
         print("CONTROLS:")
         print("=" * 50)
-        print("P = Start drawing rectangle (4 clicks)")
+        print("P = Start drawing polygon (click multiple points)")
+        print("ENTER = Finish polygon and save")
         print("S = Delete saved coordinates")
         print("O = Reset counters")
         print("ESC = Exit")
         print("=" * 50)
-        print("✅ LOGIC: Entering region = IN, Exiting region = OUT\n")
+        print("✅ LOGIC: Entering polygon = IN, Exiting polygon = OUT\n")
 
         while True:
             if self.is_rtsp:
@@ -198,35 +203,40 @@ class ObjectCounter:
             if self.frame_count % 3 != 0:
                 continue
 
-            # Draw existing points
+            # Draw existing polygon points
             for i, p in enumerate(self.region):
                 cv2.circle(frame, p, 5, (0, 0, 255), -1)
                 cv2.putText(frame, str(i+1), (p[0]+10, p[1]), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
 
-            # Draw lines between points
+            # Draw polygon lines
             if len(self.region) > 1:
                 for i in range(len(self.region) - 1):
                     cv2.line(frame, self.region[i], self.region[i+1], (255, 0, 0), 2)
-                if len(self.region) == 4:
-                    cv2.line(frame, self.region[3], self.region[0], (255, 0, 0), 2)
+                
+                # Close the polygon if finished
+                if self.region_initialized and len(self.region) > 2:
+                    cv2.line(frame, self.region[-1], self.region[0], (255, 0, 0), 2)
+
+            # Draw filled polygon with transparency
+            if self.region_initialized and len(self.region) >= 3:
+                overlay = frame.copy()
+                cv2.fillPoly(overlay, [self.polygon_points], (0, 255, 0))
+                cv2.addWeighted(overlay, 0.3, frame, 0.7, 0, frame)
+                cv2.polylines(frame, [self.polygon_points], True, (0, 255, 0), 2)
 
             # Show cursor crosshair when in point selection mode
             if self.point_selection_mode:
                 x, y = self.current_mouse_pos
                 cv2.line(frame, (x-20, y), (x+20, y), (0, 255, 255), 1)
                 cv2.line(frame, (x, y-20), (x, y+20), (0, 255, 255), 1)
-                cv2.putText(frame, f"Point {len(self.region)+1}/4", (x+10, y-10),
+                
+                # Preview line from last point to cursor
+                if len(self.region) > 0:
+                    cv2.line(frame, self.region[-1], (x, y), (255, 255, 0), 1)
+                
+                cv2.putText(frame, f"Point {len(self.region)+1}", (x+10, y-10),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
-
-            # Initialize region if we have 4 points
-            if len(self.region) == 4 and not self.region_initialized:
-                self.initialize_region()
-                self.region_initialized = True
-
-            # Draw rectangle
-            if self.region_initialized:
-                cv2.rectangle(frame, (self.x1, self.y1), (self.x2, self.y2), (0,255,0), 2)
 
             # Detection and tracking
             results = self.model.track(frame, persist=True,
@@ -262,8 +272,11 @@ class ObjectCounter:
             
             # Show mode indicator
             if self.point_selection_mode:
-                cv2.putText(frame, f"DRAWING MODE [{len(self.region)}/4]", (450,35),
+                cv2.putText(frame, f"DRAWING MODE [{len(self.region)} points]", (450,35),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,255), 2)
+            elif len(self.region) >= 3:
+                cv2.putText(frame, f"POLYGON: {len(self.region)} points", (450,35),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,0), 2)
 
             if self.show:
                 cv2.imshow("ObjectCounter", frame)
@@ -274,8 +287,17 @@ class ObjectCounter:
                         self.point_selection_mode = True
                         self.region = []  # Clear existing points
                         self.region_initialized = False
-                        print("📍 Point selection mode ON - Click 4 points")
+                        print("📍 Polygon drawing mode ON - Click points, press ENTER to finish")
                     
+                elif key == 13:  # ENTER key
+                    if self.point_selection_mode and len(self.region) >= 3:
+                        self.save_region()
+                        self.initialize_region()
+                        self.point_selection_mode = False
+                        print(f"✅ Polygon finished with {len(self.region)} points")
+                    elif self.point_selection_mode:
+                        print("⚠️  Need at least 3 points to create a polygon")
+                
                 elif key == ord('s') or key == ord('S'):
                     self.delete_region()
                     self.point_selection_mode = False
