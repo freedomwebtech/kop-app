@@ -39,14 +39,6 @@ class ObjectCounter:
         self.in_count = 0
         self.out_count = 0
 
-        # -------- Miss tracking --------
-        self.active_inside = set()
-        self.active_outside = set()
-        self.missed_inside = set()
-        self.missed_outside = set()
-
-        self.max_missing_frames = 40
-
         # -------- Region --------
         self.region = []
         self.region_initialized = False
@@ -141,28 +133,6 @@ class ObjectCounter:
             print(f"✅ EXIT ID {tid}")
 
 
-    # ================= MISS =================
-    def check_lost(self):
-        lost = []
-        for tid, last in self.last_seen.items():
-            if self.frame_count - last > self.max_missing_frames:
-                lost.append(tid)
-
-        for tid in lost:
-            if tid in self.active_inside:
-                self.missed_inside.add(tid)
-                print(f"❌ MISS INSIDE ID {tid}")
-
-            if tid in self.active_outside:
-                self.missed_outside.add(tid)
-                print(f"❌ MISS OUTSIDE ID {tid}")
-
-            self.hist.pop(tid, None)
-            self.last_seen.pop(tid, None)
-            self.active_inside.discard(tid)
-            self.active_outside.discard(tid)
-
-
     # ================= RESET =================
     def reset_all(self):
         self.end_session()
@@ -172,10 +142,6 @@ class ObjectCounter:
         self.out_count = 0
         self.hist.clear()
         self.last_seen.clear()
-        self.active_inside.clear()
-        self.active_outside.clear()
-        self.missed_inside.clear()
-        self.missed_outside.clear()
         self.counted_ids.clear()
 
         self.start_new_session()
@@ -231,27 +197,18 @@ class ObjectCounter:
                     self.hist[tid] = (cx,cy)
 
                     inside = self.is_inside((cx,cy))
-
-                    if inside:
-                        self.active_inside.add(tid)
-                        self.active_outside.discard(tid)
-                    else:
-                        self.active_outside.add(tid)
-                        self.active_inside.discard(tid)
-
                     color = (0,255,0) if inside else (0,0,255)
+
                     cv2.rectangle(frame, (x1,y1),(x2,y2), color, 2)
                     cv2.putText(frame, f"ID:{tid}", (x1,y1-5),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
-            self.check_lost()
-
-            # HUD
-            cv2.rectangle(frame, (0, 0), (1020, 70), (0, 0, 0), -1)
-            cv2.putText(frame, f"IN: {self.in_count}", (20,45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,0), 2)
-            cv2.putText(frame, f"OUT: {self.out_count}", (150,45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,100,255), 2)
-            cv2.putText(frame, f"MISS IN: {len(self.missed_inside)}", (300,45), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,0), 2)
-            cv2.putText(frame, f"MISS OUT: {len(self.missed_outside)}", (520,45), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,100,255), 2)
+            # HUD (ONLY IN / OUT)
+            cv2.rectangle(frame, (0, 0), (1020, 60), (0, 0, 0), -1)
+            cv2.putText(frame, f"IN: {self.in_count}", (30,40),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
+            cv2.putText(frame, f"OUT: {self.out_count}", (220,40),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0,100,255), 2)
 
             if self.show:
                 cv2.imshow("ObjectCounter", frame)
@@ -275,7 +232,7 @@ class ObjectCounter:
 # ================= RUN =================
 if __name__ == "__main__":
     counter = ObjectCounter(
-        source="your_video.mp4",
+        source="your_video.mp4",   # or RTSP
         model="best_float32.tflite",
         classes_to_count=[0],
         show=True
