@@ -1,33 +1,118 @@
-from __future__ import annotations
+import cv2
+from ultralytics import YOLO
+import json
+import os
+import numpy as np
+from imutils.video import VideoStream
+import time
+from datetime import datetime
 from collections import defaultdict
-from typing import Any
-
-from ultralytics.solutions.solutions import BaseSolution, SolutionAnnotator, SolutionResults
-from ultralytics.utils.plotting import colors
 
 
-class ObjectCounter(BaseSolution):
-    """
-    Rectangular-Region Object Counter
-    Only works with rectangle region: [(x1,y1),(x2,y1),(x2,y2),(x1,y2)]
-    """
+class ObjectCounter:
+    def __init__(self, source, model="best_float32.tflite",
+                 classes_to_count=[0], show=True,
+                 json_file="region_coords.json"):
 
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
+        self.source = source
+        self.model = YOLO(model)
+        self.names = self.model.names
+        self.classes = classes_to_count
+        self.show = show
 
+        # -------- RTSP or File --------
+        if isinstance(source, str) and source.startswith("rtsp://"):
+            self.cap = VideoStream(source).start()
+            time.sleep(2.0)
+            self.is_rtsp = True
+        else:
+            self.cap = cv2.VideoCapture(source)
+            self.is_rtsp = False
+
+        # -------- Session Data --------
+        self.session_start_time = datetime.now()
+        self.start_new_session()
+
+        # -------- Tracking Data --------
+        self.hist = {}
+        self.last_seen = {}
+        self.counted_ids = set()
+
+        # -------- Counters --------
         self.in_count = 0
         self.out_count = 0
-        self.counted_ids = set()
-        self.classwise_count = defaultdict(lambda: {"IN": 0, "OUT": 0})
+
+        # -------- Miss Tracking --------
+        self.active_inside = set()
+        self.active_outside = set()
+        self.missed_inside = set()
+        self.missed_outside = set()
+
+        self.max_missing_frames = 40
+
+        # -------- Region --------
+        self.region = []
+        self.json_file = json_file
+        self.load_region()
         self.region_initialized = False
 
-        self.show_in = self.CFG.get("show_in", True)
-        self.show_out = self.CFG.get("show_out", True)
-        self.margin = self.line_width * 2
+        self.frame_count = 0
 
-        self.rect = None
+        cv2.namedWindow("ObjectCounter")
+        cv2.setMouseCallback("ObjectCounter", self.mouse_event)
 
 
+    # ---------------- Session ----------------
+    def start_new_session(self):
+        self.current_session_data = {
+            'day': datetime.now().strftime('%A'),
+            'date': datetime.now().strftime('%Y-%m-%d'),
+            'start_time': datetime.now().strftime('%H:%M:%S'),
+            'end_time': None,
+            'in_count': 0,
+            'out_count': 0
+        }
+
+
+    def end_current_session(self):
+        self.current_session_data['end_time'] = datetime.now().strftime('%H:%M:%S')
+        self.current_session_data['in_count'] = self.in_count
+        self.current_session_data['out_count'] = self.out_count
+
+
+    def print_session_summary(self):
+        print("\n" + "=" * 60)
+        print("SESSION SUMMARY")
+        print("=" * 60)
+        for k, v in self.current_session_data.items():
+            print(f"{k:15}: {v}")
+        print("=" * 60 + "\n")
+
+
+    # ---------------- Mouse ----------------
+    def mouse_event(self, event, x, y, flags, param):
+        if event == cv2.EVENT_LBUTTONDOWN:
+            if len(self.region) < 4:
+                self.region.append((x, y))
+                print("Point Added:", (x, y))
+                if len(self.region) == 4:
+                    self.save_region()
+                    print("Rectangle Saved!")
+
+
+    # ---------------- Save / Load Region ----------------
+    def save_region(self):
+        with open(self.json_file, "w") as f:
+            json.dump({"region": self.region}, f)
+
+
+    def load_region(self):
+        if os.path.exists(self.json_file):
+            with open(self.json_file) as f:
+                self.region = json.load(f)["region"]
+
+
+    # ---------------- Rectangle Logic ----------------
     def initialize_region(self):
         """Convert 4-Point Region into Rectangle Bounds"""
         xs = [p[0] for p in self.region]
@@ -35,7 +120,6 @@ class ObjectCounter(BaseSolution):
 
         self.x1, self.x2 = int(min(xs)), int(max(xs))
         self.y1, self.y2 = int(min(ys)), int(max(ys))
-
         self.rect = True
 
 
@@ -45,8 +129,8 @@ class ObjectCounter(BaseSolution):
         return self.x1 <= x <= self.x2 and self.y1 <= y <= self.y2
 
 
-    def count_objects(self, curr, prev, track_id, cls):
-        """Count entering and exiting rectangle"""
+    def count_objects(self, curr, prev, track_id):
+        """Enter / Exit Rectangle Count"""
 
         if prev is None or track_id in self.counted_ids:
             return
@@ -54,65 +138,157 @@ class ObjectCounter(BaseSolution):
         was_inside = self.is_inside(prev)
         is_inside = self.is_inside(curr)
 
-        # ✅ Entering rectangle
+        # ✅ Enter
         if not was_inside and is_inside:
             self.in_count += 1
-            self.classwise_count[self.names[cls]]["IN"] += 1
             self.counted_ids.add(track_id)
+            print(f"✅ ENTER ID:{track_id}")
 
-        # ✅ Leaving rectangle
+        # ✅ Exit
         elif was_inside and not is_inside:
             self.out_count += 1
-            self.classwise_count[self.names[cls]]["OUT"] += 1
             self.counted_ids.add(track_id)
+            print(f"✅ EXIT ID:{track_id}")
 
 
-    def display_counts(self, plot_im):
-        labels = {}
-        for k, v in self.classwise_count.items():
-            if v["IN"] or v["OUT"]:
-                labels[k.upper()] = f"IN {v['IN']}  OUT {v['OUT']}"
+    # ---------------- Miss Detection ----------------
+    def check_lost_ids(self):
+        current = self.frame_count
+        lost = []
 
-        if labels:
-            self.annotator.display_analytics(
-                plot_im, labels, (0, 0, 255), (255, 255, 255), self.margin
-            )
+        for tid, last in self.last_seen.items():
+            if current - last > self.max_missing_frames:
+                lost.append(tid)
+
+        for tid in lost:
+            if tid in self.active_inside:
+                self.missed_inside.add(tid)
+                print(f"❌ MISSED INSIDE ID:{tid}")
+
+            if tid in self.active_outside:
+                self.missed_outside.add(tid)
+                print(f"❌ MISSED OUTSIDE ID:{tid}")
+
+            self.hist.pop(tid, None)
+            self.last_seen.pop(tid, None)
+            self.active_inside.discard(tid)
+            self.active_outside.discard(tid)
 
 
-    def process(self, im0):
-        """Main frame processing method"""
+    # ---------------- Reset ----------------
+    def reset_all_data(self):
+        self.end_current_session()
+        self.print_session_summary()
 
-        if not self.region_initialized:
-            self.initialize_region()
-            self.region_initialized = True
+        self.hist.clear()
+        self.last_seen.clear()
+        self.active_inside.clear()
+        self.active_outside.clear()
+        self.missed_inside.clear()
+        self.missed_outside.clear()
+        self.counted_ids.clear()
 
-        self.extract_tracks(im0)
-        self.annotator = SolutionAnnotator(im0, line_width=self.line_width)
+        self.in_count = 0
+        self.out_count = 0
 
-        # ✅ Draw rectangle region
-        self.annotator.draw_region(
-            reg_pts=self.region, color=(0, 255, 0), thickness=self.line_width * 2
-        )
+        self.start_new_session()
+        print("✅ RESET DONE")
 
-        for box, tid, cls, conf in zip(self.boxes, self.track_ids, self.clss, self.confs):
-            self.annotator.box_label(
-                box, label=self.adjust_box_label(cls, conf, tid), color=colors(cls, True)
-            )
 
-            self.store_tracking_history(tid, box)
-            prev = self.track_history[tid][-2] if len(self.track_history[tid]) > 1 else None
-            curr = self.track_history[tid][-1]
+    # ---------------- Main Loop ----------------
+    def run(self):
+        print("RUNNING - Draw rectangle with 4 clicks")
+        print("Press O = Reset | ESC = Exit")
 
-            self.count_objects(curr, prev, tid, cls)
+        while True:
+            frame = self.cap.read() if self.is_rtsp else self.cap.read()[1]
+            if frame is None:
+                break
 
-        plot_im = self.annotator.result()
-        self.display_counts(plot_im)
-        self.display_output(plot_im)
+            self.frame_count += 1
+            if self.frame_count % 3 != 0:
+                continue
 
-        return SolutionResults(
-            plot_im=plot_im,
-            in_count=self.in_count,
-            out_count=self.out_count,
-            classwise_count=dict(self.classwise_count),
-            total_tracks=len(self.track_ids),
-        )
+            frame = cv2.resize(frame, (1020, 600))
+
+            if len(self.region) == 4 and not self.region_initialized:
+                self.initialize_region()
+                self.region_initialized = True
+
+            # Draw Region
+            if self.region_initialized:
+                cv2.rectangle(frame, (self.x1, self.y1), (self.x2, self.y2), (255, 0, 0), 2)
+            else:
+                for p in self.region:
+                    cv2.circle(frame, p, 5, (0, 0, 255), -1)
+
+            results = self.model.track(
+                frame, persist=True, classes=self.classes, conf=0.80)
+
+            if results[0].boxes.id is not None and self.region_initialized:
+                ids = results[0].boxes.id.cpu().numpy().astype(int)
+                boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
+
+                for tid, box in zip(ids, boxes):
+                    x1, y1, x2, y2 = box
+                    cx = int((x1 + x2) / 2)
+                    cy = int((y1 + y2) / 2)
+
+                    self.last_seen[tid] = self.frame_count
+
+                    if tid in self.hist:
+                        self.count_objects((cx, cy), self.hist[tid], tid)
+
+                    self.hist[tid] = (cx, cy)
+
+                    inside = self.is_inside((cx, cy))
+
+                    if inside:
+                        self.active_inside.add(tid)
+                        self.active_outside.discard(tid)
+                    else:
+                        self.active_outside.add(tid)
+                        self.active_inside.discard(tid)
+
+                    color = (0, 255, 0) if inside else (0, 0, 255)
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                    cv2.putText(frame, f"ID:{tid}", (x1, y1 - 5),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+
+            self.check_lost_ids()
+
+            # ================= HUD =================
+            cv2.rectangle(frame, (0, 0), (1020, 80), (0, 0, 0), -1)
+            cv2.putText(frame, f"IN: {self.in_count}", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,0), 2)
+            cv2.putText(frame, f"OUT: {self.out_count}", (150, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,100,255), 2)
+            cv2.putText(frame, f"MISS IN: {len(self.missed_inside)}", (300, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,0), 2)
+            cv2.putText(frame, f"MISS OUT: {len(self.missed_outside)}", (480, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,100,255), 2)
+
+            if self.show:
+                cv2.imshow("ObjectCounter", frame)
+                key = cv2.waitKey(1)
+
+                if key == ord("o"):
+                    self.reset_all_data()
+                elif key == 27:
+                    break
+
+        self.end_current_session()
+        self.print_session_summary()
+
+        if self.is_rtsp:
+            self.cap.stop()
+        else:
+            self.cap.release()
+        cv2.destroyAllWindows()
+
+
+# ======================= RUN =======================
+if __name__ == "__main__":
+    counter = ObjectCounter(
+        source="your_video.mp4",
+        model="best_float32.tflite",
+        classes_to_count=[0],
+        show=True
+    )
+    counter.run()
