@@ -2,43 +2,9 @@ import cv2
 from ultralytics import YOLO
 import json
 import os
-import numpy as np
 from imutils.video import VideoStream
 import time
 from datetime import datetime
-
-# ==========================================================
-#                HSV COLOR DETECTION (Brown + White)
-# ==========================================================
-
-BROWN_LOWER = np.array([5, 80, 60])
-BROWN_UPPER = np.array([20, 255, 255])
-
-WHITE_LOWER = np.array([0, 0, 200])
-WHITE_UPPER = np.array([180, 40, 255])
-
-def detect_box_color(frame, box):
-    x1, y1, x2, y2 = box
-    roi = frame[y1:y2, x1:x2]
-
-    if roi.size == 0:
-        return "Unknown"
-
-    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-
-    brown_mask = cv2.inRange(hsv, BROWN_LOWER, BROWN_UPPER)
-    brown_intensity = brown_mask.mean()
-
-    white_mask = cv2.inRange(hsv, WHITE_LOWER, WHITE_UPPER)
-    white_intensity = white_mask.mean()
-
-    if brown_intensity > 20:
-        return "Brown"
-    elif white_intensity > 20:
-        return "White"
-
-    return "Unknown"
-
 
 # ==========================================================
 #                     OBJECT COUNTER CLASS
@@ -75,18 +41,12 @@ class ObjectCounter:
         self.crossed_ids = set()
         self.counted = set()
         
-        # Store color detected at crossing point
-        self.color_at_crossing = {}
-        
         # Track which side object first appeared on
         self.origin_side = {}
 
         # -------- Counters --------
         self.in_count = 0
         self.out_count = 0
-
-        self.color_in_count = {}
-        self.color_out_count = {}
 
         # ✅ ONLY IN/OUT MISSED
         self.missed_in = set()
@@ -116,9 +76,7 @@ class ObjectCounter:
             'in_count': 0,
             'out_count': 0,
             'missed_in': 0,
-            'missed_out': 0,
-            'color_in': {},
-            'color_out': {}
+            'missed_out': 0
         }
 
     def end_current_session(self):
@@ -129,8 +87,6 @@ class ObjectCounter:
             self.current_session_data['out_count'] = self.out_count
             self.current_session_data['missed_in'] = len(self.missed_in)
             self.current_session_data['missed_out'] = len(self.missed_out)
-            self.current_session_data['color_in'] = dict(self.color_in_count)
-            self.current_session_data['color_out'] = dict(self.color_out_count)
 
     def print_session_summary(self):
         """Print session summary to console"""
@@ -145,21 +101,6 @@ class ObjectCounter:
         print(f"OUT Count:     {self.current_session_data['out_count']}")
         print(f"Missed IN:     {self.current_session_data['missed_in']}")
         print(f"Missed OUT:    {self.current_session_data['missed_out']}")
-        print("\nColor-wise Breakdown:")
-        
-        all_colors = set(
-            list(self.current_session_data['color_in'].keys()) + 
-            list(self.current_session_data['color_out'].keys())
-        )
-        
-        if all_colors:
-            for color in sorted(all_colors):
-                in_c = self.current_session_data['color_in'].get(color, 0)
-                out_c = self.current_session_data['color_out'].get(color, 0)
-                print(f"  {color:10s} - IN: {in_c:3d}, OUT: {out_c:3d}")
-        else:
-            print("  No color data available")
-        
         print("=" * 80 + "\n")
 
     # ---------------- Mouse ----------------
@@ -220,7 +161,6 @@ class ObjectCounter:
             # Cleanup
             self.hist.pop(tid, None)
             self.last_seen.pop(tid, None)
-            self.color_at_crossing.pop(tid, None)
             self.origin_side.pop(tid, None)
 
     # ---------------- Reset Function ----------------
@@ -233,10 +173,7 @@ class ObjectCounter:
         self.last_seen.clear()
         self.crossed_ids.clear()
         self.counted.clear()
-        self.color_at_crossing.clear()
         self.origin_side.clear()
-        self.color_in_count.clear()
-        self.color_out_count.clear()
         self.missed_in.clear()
         self.missed_out.clear()
         self.in_count = 0
@@ -301,41 +238,24 @@ class ObjectCounter:
 
                             if tid not in self.counted:
                                 if s2 > 0:
-                                    if tid in self.color_at_crossing:
-                                        color_name = self.color_at_crossing[tid]
-                                    else:
-                                        color_name = detect_box_color(frame, box)
-                                    
                                     self.in_count += 1
-                                    self.color_in_count[color_name] = self.color_in_count.get(color_name, 0) + 1
-                                    print(f"✅ IN - ID:{tid} Color:{color_name}")
-                                    
+                                    print(f"✅ IN - ID:{tid}")
                                 else:
-                                    color_name = detect_box_color(frame, box)
-                                    
                                     self.out_count += 1
-                                    self.color_out_count[color_name] = self.color_out_count.get(color_name, 0) + 1
-                                    print(f"✅ OUT - ID:{tid} Color:{color_name}")
+                                    print(f"✅ OUT - ID:{tid}")
 
                                 self.counted.add(tid)
-                        
-                        if s2 < 0:
-                            color_name = detect_box_color(frame, box)
-                            self.color_at_crossing[tid] = color_name
 
                     self.hist[tid] = (cx, cy)
 
-                    display_color = self.color_at_crossing.get(tid, detect_box_color(frame, box))
                     origin_label = self.origin_side.get(tid, "?")
                     
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    cv2.putText(frame, f"{display_color} [{origin_label}]", (x1, y1 - 10),
+                    cv2.putText(frame, f"ID:{tid} [{origin_label}]", (x1, y1 - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 200, 0), 2)
 
             if self.line_p1:
                 self.check_lost_ids()
-
-            # ================= NO DISPLAY PANEL - REMOVED ALL OVERLAY CODE =================
 
             if self.show:
                 cv2.imshow("ObjectCounter", frame)
