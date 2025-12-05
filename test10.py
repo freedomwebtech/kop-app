@@ -1,151 +1,281 @@
 import cv2
-import numpy as np
 from ultralytics import YOLO
-from collections import defaultdict
+import json
+import os
+from imutils.video import VideoStream
+import time
+from datetime import datetime
 
-# ----------------------------
-# SIMPLE BYTE-TRACK IMPLEMENTATION
-# ----------------------------
-class Track:
-    def __init__(self, track_id, tlbr):
-        self.track_id = track_id
-        self.tlbr = tlbr
-        self.time_since_update = 0
-        self.hits = 1
-    
-    def update(self, tlbr):
-        self.tlbr = tlbr
-        self.time_since_update = 0
-        self.hits += 1
-    
-    def is_confirmed(self):
-        return self.hits >= 2
+# ==========================================================
+#                     OBJECT COUNTER CLASS
+# ==========================================================
 
-class ByteTrack:
-    def __init__(self, iou_threshold=0.3):
-        self.tracks = []
-        self.next_id = 1
-        self.iou_threshold = iou_threshold
-
-    def iou(self, boxA, boxB):
-        xA = max(boxA[0], boxB[0])
-        yA = max(boxA[1], boxB[1])
-        xB = min(boxA[2], boxB[2])
-        yB = min(boxA[3], boxB[3])
-
-        interArea = max(0, xB - xA) * max(0, yB - yA)
-        boxAArea = (boxA[2] - boxA[0]) * (boxA[3] - boxA[1])
-        boxBArea = (boxB[2] - boxB[0]) * (boxB[3] - boxB[1])
-        return interArea / float(boxAArea + boxBArea - interArea + 1e-6)
-
-    def update_tracks(self, detections, frame):
-        new_tracks = []
-
-        for det in detections:
-            best_iou = 0
-            best_track = None
-            det_box = det[:4]
-
-            for track in self.tracks:
-                iou_score = self.iou(det_box, track.tlbr)
-                if iou_score > best_iou:
-                    best_iou = iou_score
-                    best_track = track
-
-            if best_iou > self.iou_threshold:
-                best_track.update(det_box)
-                new_tracks.append(best_track)
-            else:
-                new_track = Track(self.next_id, det_box)
-                self.next_id += 1
-                new_tracks.append(new_track)
-
-        self.tracks = new_tracks
-        return self.tracks
-
-
-# ----------------------------
-# MAIN OBJECT COUNTER
-# ----------------------------
 class ObjectCounter:
-    def __init__(self, source, model, classes_to_count=[0], show=True):
+    def __init__(self, source, model="best_float32.tflite",
+                 classes_to_count=[0], show=True,
+                 json_file="line_coords_front.json"):
+
         self.source = source
         self.model = YOLO(model)
-        self.classes_to_count = classes_to_count
+        self.names = self.model.names
+        self.classes = classes_to_count
         self.show = show
 
-        self.line_y = 300         # Crossing line position
+        # -------- RTSP or File --------
+        if isinstance(source, str) and source.startswith("rtsp://"):
+            self.cap = VideoStream(source).start()
+            time.sleep(2.0)
+            self.is_rtsp = True
+        else:
+            self.cap = cv2.VideoCapture(source)
+            self.is_rtsp = False
+
+        # -------- Session Data --------
+        self.session_start_time = datetime.now()
+        self.current_session_data = None
+        self.start_new_session()
+
+        # -------- Tracking Data --------
+        self.hist = {}
+        self.last_seen = {}
+        self.crossed_ids = set()
+        self.counted = set()
+        
+        # Track which side object first appeared on
+        self.origin_side = {}
+
+        # -------- Counters --------
         self.in_count = 0
         self.out_count = 0
 
-        self.tracker = ByteTrack()
-        self.track_history = defaultdict(lambda: [])
+        # ONLY MISSED
+        self.missed_in = set()
+        self.missed_out = set()
+        self.max_missing_frames = 40
 
-    def detect_and_track(self, frame):
-        results = self.model(frame, verbose=False)[0]
+        # -------- Line --------
+        self.line_p1 = None
+        self.line_p2 = None
+        self.temp_points = []
+        self.json_file = json_file
+        self.load_line()
 
-        detections = []
-        for box in results.boxes:
-            cls = int(box.cls)
-            if cls in self.classes_to_count:
-                x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-                conf = float(box.conf)
-                detections.append([x1, y1, x2, y2, conf, cls])
+        self.frame_count = 0
 
-        tracks = self.tracker.update_tracks(detections, frame)
+        cv2.namedWindow("ObjectCounter")
+        cv2.setMouseCallback("ObjectCounter", self.mouse_event)
 
-        for track in tracks:
-            if not track.is_confirmed():
-                continue
+    # ---------------- Session Management ----------------
+    def start_new_session(self):
+        self.current_session_data = {
+            'day': datetime.now().strftime('%A'),
+            'date': datetime.now().strftime('%Y-%m-%d'),
+            'start_time': datetime.now().strftime('%H:%M:%S'),
+            'end_time': None,
+            'in_count': 0,
+            'out_count': 0,
+            'missed_in': 0,
+            'missed_out': 0
+        }
 
-            track_id = track.track_id
-            l, t, r, b = map(int, track.tlbr)
-            cx, cy = (l + r) // 2, (t + b) // 2
+    def end_current_session(self):
+        if self.current_session_data:
+            self.current_session_data['end_time'] = datetime.now().strftime('%H:%M:%S')
+            self.current_session_data['in_count'] = self.in_count
+            self.current_session_data['out_count'] = self.out_count
+            self.current_session_data['missed_in'] = len(self.missed_in)
+            self.current_session_data['missed_out'] = len(self.missed_out)
 
-            self.track_history[track_id].append((cx, cy))
+    def print_session_summary(self):
+        print("\n" + "=" * 80)
+        print("                    SESSION SUMMARY")
+        print("=" * 80)
+        print(f"Day:           {self.current_session_data['day']}")
+        print(f"Date:          {self.current_session_data['date']}")
+        print(f"Start Time:    {self.current_session_data['start_time']}")
+        print(f"End Time:      {self.current_session_data['end_time']}")
+        print(f"IN Count:      {self.current_session_data['in_count']}")
+        print(f"OUT Count:     {self.current_session_data['out_count']}")
+        print(f"Missed IN:     {self.current_session_data['missed_in']}")
+        print(f"Missed OUT:    {self.current_session_data['missed_out']}")
+        print("=" * 80 + "\n")
 
-            # IN / OUT counting
-            if len(self.track_history[track_id]) > 2:
-                y_prev = self.track_history[track_id][-2][1]
-                y_now  = cy
+    # ---------------- Mouse ----------------
+    def mouse_event(self, event, x, y, flags, param):
+        if event == cv2.EVENT_LBUTTONDOWN:
+            self.temp_points.append((x, y))
+            if len(self.temp_points) == 2:
+                self.line_p1, self.line_p2 = self.temp_points
+                self.temp_points = []
+                self.save_line()
 
-                if y_prev < self.line_y <= y_now:
-                    self.in_count += 1
+    # ---------------- Save / Load Line ----------------
+    def save_line(self):
+        with open(self.json_file, "w") as f:
+            json.dump({"line_p1": self.line_p1, "line_p2": self.line_p2}, f)
 
-                if y_prev > self.line_y >= y_now:
-                    self.out_count += 1
+    def load_line(self):
+        if os.path.exists(self.json_file):
+            with open(self.json_file) as f:
+                data = json.load(f)
+                self.line_p1 = tuple(data["line_p1"])
+                self.line_p2 = tuple(data["line_p2"])
 
-            # Draw box + ID
-            cv2.rectangle(frame, (l, t), (r, b), (0,255,0), 2)
-            cv2.putText(frame, f"ID {track_id}", (l, t-5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
+    # ---------------- Utility ----------------
+    def side(self, px, py, x1, y1, x2, y2):
+        return (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
 
-            cv2.circle(frame, (cx, cy), 4, (0,0,255), -1)
+    # ================= MISSED TRACK HANDLER =================
+    def check_lost_ids(self):
+        current = self.frame_count
+        lost = []
 
-        return frame
+        for tid, last in self.last_seen.items():
+            if current - last > self.max_missing_frames:
+                lost.append(tid)
 
+        for tid in lost:
+            if tid in self.crossed_ids and tid not in self.counted:
+                if tid in self.hist:
+                    last_cx, last_cy = self.hist[tid]
+                    last_side = self.side(last_cx, last_cy, *self.line_p1, *self.line_p2)
+                    
+                    if last_side > 0:
+                        self.missed_in.add(tid)
+                        print(f"⚠️ MISSED IN - ID:{tid}")
+                    elif last_side < 0:
+                        self.missed_out.add(tid)
+                        print(f"⚠️ MISSED OUT - ID:{tid}")
+
+            self.hist.pop(tid, None)
+            self.last_seen.pop(tid, None)
+            self.origin_side.pop(tid, None)
+
+    # ---------------- Reset Function ----------------
+    def reset_all_data(self):
+        self.end_current_session()
+        self.print_session_summary()
+        
+        self.hist.clear()
+        self.last_seen.clear()
+        self.crossed_ids.clear()
+        self.counted.clear()
+        self.origin_side.clear()
+        self.missed_in.clear()
+        self.missed_out.clear()
+        self.in_count = 0
+        self.out_count = 0
+        
+        self.start_new_session()
+        print("✅ RESET DONE - New session started")
+
+    # ---------------- Main Loop ----------------
     def run(self):
-        cap = cv2.VideoCapture(self.source)
+        print("RUNNING... Press O to Reset & Show Summary | ESC to Exit")
 
         while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
+            if self.is_rtsp:
+                frame = self.cap.read()
+            else:
+                ret, frame = self.cap.read()
+                if not ret:
+                    break
 
-            frame = self.detect_and_track(frame)
+            self.frame_count += 1
 
-            # Draw line + counts
-            cv2.line(frame, (0, self.line_y), (frame.shape[1], self.line_y), (0,0,255), 2)
-            cv2.putText(frame, f"IN: {self.in_count}", (20, 40),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 3)
-            cv2.putText(frame, f"OUT: {self.out_count}", (20, 80),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 3)
+            # Resize frame for stable processing
+            frame = cv2.resize(frame, (640, 360))
+
+            # ============== DISPLAY IN/OUT COUNTERS ==============
+            cv2.putText(frame, f"IN  : {self.in_count}", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+
+            cv2.putText(frame, f"OUT : {self.out_count}", (10, 70),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
+            # ======================================================
+
+            for pt in self.temp_points:
+                cv2.circle(frame, pt, 5, (0, 0, 255), -1)
+
+            if self.line_p1:
+                cv2.line(frame, self.line_p1, self.line_p2, (255, 255, 255), 2)
+
+            results = self.model.track(frame, persist=True, classes=self.classes, conf=0.80)
+
+            if results[0].boxes.id is not None and self.line_p1:
+                ids = results[0].boxes.id.cpu().numpy().astype(int)
+                boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
+
+                for tid, box in zip(ids, boxes):
+                    x1, y1, x2, y2 = box
+                    cx = int((x1 + x2) / 2)
+                    cy = int((y1 + y2) / 2)
+
+                    self.last_seen[tid] = self.frame_count
+
+                    if tid not in self.hist:
+                        s_init = self.side(cx, cy, *self.line_p1, *self.line_p2)
+                        self.origin_side[tid] = "IN" if s_init < 0 else "OUT"
+
+                    if tid in self.hist:
+                        px, py = self.hist[tid]
+                        s1 = self.side(px, py, *self.line_p1, *self.line_p2)
+                        s2 = self.side(cx, cy, *self.line_p1, *self.line_p2)
+
+                        if s1 * s2 < 0:
+                            self.crossed_ids.add(tid)
+
+                            if tid not in self.counted:
+                                if s2 > 0:
+                                    self.in_count += 1
+                                    print(f"✅ IN - ID:{tid}")
+                                else:
+                                    self.out_count += 1
+                                    print(f"✅ OUT - ID:{tid}")
+
+                                self.counted.add(tid)
+
+                    self.hist[tid] = (cx, cy)
+
+                    origin_label = self.origin_side.get(tid, "?")
+                    
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    cv2.putText(frame, f"ID:{tid} [{origin_label}]", (x1, y1 - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 200, 0), 2)
+
+            if self.line_p1:
+                self.check_lost_ids()
 
             if self.show:
-                cv2.imshow("Counter", frame)
+                cv2.imshow("ObjectCounter", frame)
+                key = cv2.waitKey(1) & 0xFF
 
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
+                if key == ord('o') or key == ord('O'):
+                    self.reset_all_data()
 
-        cap.release()
+                elif key == 27:
+                    break
+
+        self.end_current_session()
+        self.print_session_summary()
+
+        if self.is_rtsp:
+            self.cap.stop()
+        else:
+            self.cap.release()
+
         cv2.destroyAllWindows()
+
+
+# ==========================================================
+#                        MAIN EXECUTION
+# ==========================================================
+
+if __name__ == "__main__":
+    counter = ObjectCounter(
+        source="your_video.mp4",
+        model="best_float32.tflite",
+        classes_to_count=[0],
+        show=True
+    )
+    counter.run()
