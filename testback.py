@@ -113,7 +113,7 @@ class ObjectCounter:
         return self.x1 <= x <= self.x2 and self.y1 <= y <= self.y2
 
 
-    # ================= COUNT (REVERSED LOGIC) =================
+    # ================= COUNT (FIXED LOGIC) =================
     def count_objects(self, curr, prev, tid):
         if prev is None or tid in self.counted_ids:
             return
@@ -121,17 +121,17 @@ class ObjectCounter:
         was = self.is_inside(prev)
         now = self.is_inside(curr)
 
-        # REVERSED: Entering region = OUT
+        # CORRECT: Entering region = IN
         if not was and now:
-            self.out_count += 1
-            self.counted_ids.add(tid)
-            print(f"✅ OUT ID {tid} (entered region)")
-
-        # REVERSED: Exiting region = IN
-        elif was and not now:
             self.in_count += 1
             self.counted_ids.add(tid)
-            print(f"✅ IN ID {tid} (exited region)")
+            print(f"✅ IN ID {tid} (entered region)")
+
+        # CORRECT: Exiting region = OUT
+        elif was and not now:
+            self.out_count += 1
+            self.counted_ids.add(tid)
+            print(f"✅ OUT ID {tid} (exited region)")
 
 
     # ================= RESET =================
@@ -153,7 +153,7 @@ class ObjectCounter:
     def run(self):
         print("Draw rectangle using 4 clicks")
         print("O = Reset | ESC = Exit")
-        print("⚠️  REVERSED LOGIC: Entering region = OUT, Exiting region = IN")
+        print("✅ CORRECT LOGIC: Entering region = IN, Exiting region = OUT")
 
         while True:
             if self.is_rtsp:
@@ -203,7 +203,7 @@ class ObjectCounter:
                     cv2.putText(frame, f"ID:{tid}", (x1,y1-5),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
-            # HUD (ONLY IN / OUT)
+            # HUD (IN / OUT)
             cv2.rectangle(frame, (0, 0), (1020, 50), (0, 0, 0), -1)
             cv2.putText(frame, f"IN: {self.in_count}", (30,35),
                         cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
