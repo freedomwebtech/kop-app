@@ -2,43 +2,9 @@ import cv2
 from ultralytics import YOLO
 import json
 import os
-import numpy as np
 from imutils.video import VideoStream
 import time
 from datetime import datetime
-
-# ==========================================================
-#                HSV COLOR DETECTION (Brown + White)
-# ==========================================================
-
-BROWN_LOWER = np.array([5, 80, 60])
-BROWN_UPPER = np.array([20, 255, 255])
-
-WHITE_LOWER = np.array([0, 0, 200])
-WHITE_UPPER = np.array([180, 40, 255])
-
-def detect_box_color(frame, box):
-    x1, y1, x2, y2 = box
-    roi = frame[y1:y2, x1:x2]
-
-    if roi.size == 0:
-        return "Unknown"
-
-    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-
-    brown_mask = cv2.inRange(hsv, BROWN_LOWER, BROWN_UPPER)
-    brown_intensity = brown_mask.mean()
-
-    white_mask = cv2.inRange(hsv, WHITE_LOWER, WHITE_UPPER)
-    white_intensity = white_mask.mean()
-
-    if brown_intensity > 20:
-        return "Brown"
-    elif white_intensity > 20:
-        return "White"
-
-    return "Unknown"
-
 
 # ==========================================================
 #                     OBJECT COUNTER CLASS
@@ -75,9 +41,6 @@ class ObjectCounter:
         self.crossed_ids = set()
         self.counted = set()
         
-        # Store color detected at crossing point
-        self.color_at_crossing = {}
-        
         # Track which side object first appeared on
         self.origin_side = {}
 
@@ -85,10 +48,7 @@ class ObjectCounter:
         self.in_count = 0
         self.out_count = 0
 
-        self.color_in_count = {}
-        self.color_out_count = {}
-
-        # ✅ ONLY IN/OUT MISSED
+        # ONLY MISSED IN/OUT
         self.missed_in = set()
         self.missed_out = set()
         self.max_missing_frames = 40
@@ -107,7 +67,6 @@ class ObjectCounter:
 
     # ---------------- Session Management ----------------
     def start_new_session(self):
-        """Start a new tracking session"""
         self.current_session_data = {
             'day': datetime.now().strftime('%A'),
             'date': datetime.now().strftime('%Y-%m-%d'),
@@ -116,24 +75,18 @@ class ObjectCounter:
             'in_count': 0,
             'out_count': 0,
             'missed_in': 0,
-            'missed_out': 0,
-            'color_in': {},
-            'color_out': {}
+            'missed_out': 0
         }
 
     def end_current_session(self):
-        """End the current session and save data"""
         if self.current_session_data:
             self.current_session_data['end_time'] = datetime.now().strftime('%H:%M:%S')
             self.current_session_data['in_count'] = self.in_count
             self.current_session_data['out_count'] = self.out_count
             self.current_session_data['missed_in'] = len(self.missed_in)
             self.current_session_data['missed_out'] = len(self.missed_out)
-            self.current_session_data['color_in'] = dict(self.color_in_count)
-            self.current_session_data['color_out'] = dict(self.color_out_count)
 
     def print_session_summary(self):
-        """Print session summary to console"""
         print("\n" + "=" * 80)
         print("                    SESSION SUMMARY")
         print("=" * 80)
@@ -145,21 +98,6 @@ class ObjectCounter:
         print(f"OUT Count:     {self.current_session_data['out_count']}")
         print(f"Missed IN:     {self.current_session_data['missed_in']}")
         print(f"Missed OUT:    {self.current_session_data['missed_out']}")
-        print("\nColor-wise Breakdown:")
-        
-        all_colors = set(
-            list(self.current_session_data['color_in'].keys()) + 
-            list(self.current_session_data['color_out'].keys())
-        )
-        
-        if all_colors:
-            for color in sorted(all_colors):
-                in_c = self.current_session_data['color_in'].get(color, 0)
-                out_c = self.current_session_data['color_out'].get(color, 0)
-                print(f"  {color:10s} - IN: {in_c:3d}, OUT: {out_c:3d}")
-        else:
-            print("  No color data available")
-        
         print("=" * 80 + "\n")
 
     # ---------------- Mouse ----------------
@@ -187,12 +125,8 @@ class ObjectCounter:
     def side(self, px, py, x1, y1, x2, y2):
         return (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
 
-    # ================= MISSED TRACK HANDLER (ONLY IN/OUT) =================
+    # ---------------- MISSED HANDLER ----------------
     def check_lost_ids(self):
-        """
-        Check for objects that disappeared without being counted.
-        Only tracks MISSED IN and MISSED OUT.
-        """
         current = self.frame_count
         lost = []
 
@@ -201,31 +135,24 @@ class ObjectCounter:
                 lost.append(tid)
 
         for tid in lost:
-            # Only check crossed objects that weren't counted
             if tid in self.crossed_ids and tid not in self.counted:
                 if tid in self.hist:
                     last_cx, last_cy = self.hist[tid]
                     last_side = self.side(last_cx, last_cy, *self.line_p1, *self.line_p2)
-                    
-                    # IN logic: ended on positive side
+
                     if last_side > 0:
                         self.missed_in.add(tid)
                         print(f"⚠️ MISSED IN - ID:{tid}")
-                    
-                    # OUT logic: ended on negative side
                     elif last_side < 0:
                         self.missed_out.add(tid)
                         print(f"⚠️ MISSED OUT - ID:{tid}")
 
-            # Cleanup
             self.hist.pop(tid, None)
             self.last_seen.pop(tid, None)
-            self.color_at_crossing.pop(tid, None)
             self.origin_side.pop(tid, None)
 
-    # ---------------- Reset Function ----------------
+    # ---------------- Reset ----------------
     def reset_all_data(self):
-        """Reset all tracking data and start new session"""
         self.end_current_session()
         self.print_session_summary()
         
@@ -233,10 +160,7 @@ class ObjectCounter:
         self.last_seen.clear()
         self.crossed_ids.clear()
         self.counted.clear()
-        self.color_at_crossing.clear()
         self.origin_side.clear()
-        self.color_in_count.clear()
-        self.color_out_count.clear()
         self.missed_in.clear()
         self.missed_out.clear()
         self.in_count = 0
@@ -258,17 +182,15 @@ class ObjectCounter:
                     break
 
             self.frame_count += 1
-            if self.frame_count % 3 != 0:
-                continue
 
-            frame = cv2.resize(frame, (1020, 600))
+            # Resize frame to 640x360
+            frame = cv2.resize(frame, (640, 360))
 
             for pt in self.temp_points:
                 cv2.circle(frame, pt, 5, (0, 0, 255), -1)
 
             if self.line_p1:
-                cv2.line(frame, self.line_p1, self.line_p2,
-                         (255, 255, 255), 2)
+                cv2.line(frame, self.line_p1, self.line_p2, (255, 255, 255), 2)
 
             results = self.model.track(
                 frame, persist=True, classes=self.classes, conf=0.80)
@@ -301,109 +223,24 @@ class ObjectCounter:
 
                             if tid not in self.counted:
                                 if s2 > 0:
-                                    if tid in self.color_at_crossing:
-                                        color_name = self.color_at_crossing[tid]
-                                    else:
-                                        color_name = detect_box_color(frame, box)
-                                    
                                     self.in_count += 1
-                                    self.color_in_count[color_name] = self.color_in_count.get(color_name, 0) + 1
-                                    print(f"✅ IN - ID:{tid} Color:{color_name}")
-                                    
+                                    print(f"✅ IN - ID:{tid}")
                                 else:
-                                    color_name = detect_box_color(frame, box)
-                                    
                                     self.out_count += 1
-                                    self.color_out_count[color_name] = self.color_out_count.get(color_name, 0) + 1
-                                    print(f"✅ OUT - ID:{tid} Color:{color_name}")
+                                    print(f"✅ OUT - ID:{tid}")
 
                                 self.counted.add(tid)
-                        
-                        if s2 < 0:
-                            color_name = detect_box_color(frame, box)
-                            self.color_at_crossing[tid] = color_name
 
                     self.hist[tid] = (cx, cy)
 
-                    display_color = self.color_at_crossing.get(tid, detect_box_color(frame, box))
                     origin_label = self.origin_side.get(tid, "?")
                     
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    cv2.putText(frame, f"{display_color} [{origin_label}]", (x1, y1 - 10),
+                    cv2.putText(frame, f"ID:{tid} [{origin_label}]", (x1, y1 - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 200, 0), 2)
 
             if self.line_p1:
                 self.check_lost_ids()
-
-            # ================= DISPLAY (NO CROSS) =================
-
-            overlay = frame.copy()
-            cv2.rectangle(overlay, (0, 0), (1020, 160), (0, 0, 0), -1)
-            frame = cv2.addWeighted(overlay, 0.35, frame, 0.65, 0)
-
-           # cv2.putText(frame, "TRACKING SYSTEM", (15, 32),
-           #             cv2.FONT_HERSHEY_SIMPLEX, 0.8, (100, 200, 255), 3)
-            cv2.circle(frame, (250, 24), 7, (0, 255, 0), -1)
-
-            y_row1 = 65
-            font_large = 0.8
-            thickness_bold = 3
-            
-           # cv2.putText(frame, "IN:", (15, y_row1),
-           #             cv2.FONT_HERSHEY_SIMPLEX, font_large, (0, 255, 150), thickness_bold)
-           # cv2.putText(frame, str(self.in_count), (75, y_row1),
-           #             cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
-
-           # cv2.putText(frame, "OUT:", (150, y_row1),
-           #             cv2.FONT_HERSHEY_SIMPLEX, font_large, (100, 180, 255), thickness_bold)
-           # cv2.putText(frame, str(self.out_count), (230, y_row1),
-            #            cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
-
-            #cv2.putText(frame, "MISS IN:", (320, y_row1),
-            #            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (100, 255, 255), 2)
-            #cv2.putText(frame, str(len(self.missed_in)), (450, y_row1),
-            #            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-
-            #cv2.putText(frame, "MISS OUT:", (530, y_row1),
-            #            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 100, 255), 2)
-            #cv2.putText(frame, str(len(self.missed_out)), (680, y_row1),
-             #           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-
-            cv2.line(frame, (10, 85), (1010, 85), (100, 100, 100), 2)
-
-            y_row2 = 118
-            brown_in = self.color_in_count.get("Brown", 0)
-            brown_out = self.color_out_count.get("Brown", 0)
-
-            cv2.rectangle(frame, (15, y_row2 - 25), (50, y_row2 - 5), (19, 69, 139), -1)
-            cv2.rectangle(frame, (15, y_row2 - 25), (50, y_row2 - 5), (255, 255, 255), 2)
-            
-            #cv2.putText(frame, "BROWN IN:", (60, y_row2),
-             #           cv2.FONT_HERSHEY_SIMPLEX, font_large, (100, 150, 255), thickness_bold)
-            #cv2.putText(frame, str(brown_in), (240, y_row2),
-            #            cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
-
-            #cv2.putText(frame, "BROWN OUT:", (350, y_row2),
-            #            cv2.FONT_HERSHEY_SIMPLEX, font_large, (100, 150, 255), thickness_bold)
-            #cv2.putText(frame, str(brown_out), (570, y_row2),
-            #            cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
-
-            y_row3 = 150
-            white_in = self.color_in_count.get("White", 0)
-            white_out = self.color_out_count.get("White", 0)
-
-            cv2.rectangle(frame, (15, y_row3 - 25), (50, y_row3 - 5), (245, 245, 245), -1)
-            cv2.rectangle(frame, (15, y_row3 - 25), (50, y_row3 - 5), (100, 100, 100), 2)
-            
-            #cv2.putText(frame, "WHITE IN:", (60, y_row3),
-            #            cv2.FONT_HERSHEY_SIMPLEX, font_large, (200, 255, 200), thickness_bold)
-            #cv2.putText(frame, str(white_in), (240, y_row3),
-            #            cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
-
-            #cv2.putText(frame, "WHITE OUT:", (350, y_row3),
-            #            cv2.FONT_HERSHEY_SIMPLEX, font_large, (200, 255, 200), thickness_bold)
-            #cv2.putText(frame, str(white_out), (570, y_row3),
-            #            cv2.FONT_HERSHEY_SIMPLEX, font_large, (255, 255, 255), thickness_bold)
 
             if self.show:
                 cv2.imshow("ObjectCounter", frame)
