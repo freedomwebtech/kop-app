@@ -199,7 +199,7 @@ class ObjectCounter:
             if self.frame_count % 3 != 0:
                 continue
 
-            #frame = cv2.resize(frame, (1020, 600))
+            frame = cv2.resize(frame, (1020, 600))
 
             for pt in self.temp_points:
                 cv2.circle(frame, pt, 5, (0, 0, 255), -1)
