@@ -111,6 +111,14 @@ class ObjectCounter:
         if event == cv2.EVENT_LBUTTONDOWN:
             self.temp_points.append((x, y))
             print(f"Polygon point {len(self.temp_points)}: ({x}, {y})")
+            
+            # Automatically complete polygon after 4 points
+            if len(self.temp_points) == 4:
+                self.region = self.temp_points.copy()
+                self.r_s = Polygon(self.region)
+                self.temp_points = []
+                self.save_geometry()
+                print(f"✅ Polygon completed with 4 points")
 
     # ---------------- Save / Load Geometry ----------------
     def save_geometry(self):
@@ -229,7 +237,7 @@ class ObjectCounter:
     # ---------------- Main Loop ----------------
     def run(self):
         print("RUNNING... [POLYGON MODE]")
-        print("Press O to Reset & Show Summary | P to finish polygon | ESC to Exit")
+        print("Click 4 points to create polygon | Press O to Reset | ESC to Exit")
 
         while True:
             if self.is_rtsp:
@@ -300,14 +308,6 @@ class ObjectCounter:
 
                 if key == ord('o') or key == ord('O'):
                     self.reset_all_data()
-                
-                elif key == ord('p') or key == ord('P'):
-                    if len(self.temp_points) >= 3:
-                        self.region = self.temp_points.copy()
-                        self.r_s = Polygon(self.region)
-                        self.temp_points = []
-                        self.save_geometry()
-                        print(f"✅ Polygon completed with {len(self.region)} points")
 
                 elif key == 27:
                     break
