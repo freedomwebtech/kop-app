@@ -5,15 +5,17 @@ import os
 from imutils.video import VideoStream
 import time
 from datetime import datetime
+import numpy as np
+from shapely.geometry import Point, Polygon
 
 # ==========================================================
-#                     OBJECT COUNTER CLASS (RTSP ONLY)
+#                     OBJECT COUNTER CLASS
 # ==========================================================
 
 class ObjectCounter:
     def __init__(self, source, model="best_float32.tflite",
                  classes_to_count=[0], show=True,
-                 json_file="line_coords_back.json"):
+                 json_file="polygon_coords.json"):
 
         self.source = source
         self.model = YOLO(model)
@@ -21,11 +23,14 @@ class ObjectCounter:
         self.classes = classes_to_count
         self.show = show
 
-        # -------- RTSP Stream Only --------
-        print(f"🔄 Connecting to RTSP stream: {source}")
-        self.cap = VideoStream(source).start()
-        time.sleep(3.0)  # Give camera time to initialize
-        print("✅ RTSP stream started")
+        # -------- RTSP or File --------
+        if isinstance(source, str) and source.startswith("rtsp://"):
+            self.cap = VideoStream(source).start()
+            time.sleep(2.0)
+            self.is_rtsp = True
+        else:
+            self.cap = cv2.VideoCapture(source)
+            self.is_rtsp = False
 
         # -------- Session Data --------
         self.session_start_time = datetime.now()
@@ -38,8 +43,8 @@ class ObjectCounter:
         self.crossed_ids = set()
         self.counted = set()
         
-        # Track which side object first appeared on
-        self.origin_side = {}
+        # Track previous position for direction
+        self.prev_position = {}
 
         # -------- Counters --------
         self.in_count = 0
@@ -50,17 +55,17 @@ class ObjectCounter:
         self.missed_out = set()
         self.max_missing_frames = 40
 
-        # -------- Line --------
-        self.line_p1 = None
-        self.line_p2 = None
+        # -------- Polygon Region (4 points) --------
+        self.polygon_points = []
         self.temp_points = []
+        self.polygon = None
         self.json_file = json_file
-        self.load_line()
+        self.load_polygon()
 
         self.frame_count = 0
 
-        cv2.namedWindow("ObjectCounter - RTSP Back")
-        cv2.setMouseCallback("ObjectCounter - RTSP Back", self.mouse_event)
+        cv2.namedWindow("ObjectCounter")
+        cv2.setMouseCallback("ObjectCounter", self.mouse_event)
 
     # ---------------- Session Management ----------------
     def start_new_session(self):
@@ -88,7 +93,7 @@ class ObjectCounter:
     def print_session_summary(self):
         """Print session summary to console"""
         print("\n" + "=" * 80)
-        print("                    SESSION SUMMARY (BACK CAMERA)")
+        print("                    SESSION SUMMARY")
         print("=" * 80)
         print(f"Day:           {self.current_session_data['day']}")
         print(f"Date:          {self.current_session_data['date']}")
@@ -103,34 +108,31 @@ class ObjectCounter:
     # ---------------- Mouse ----------------
     def mouse_event(self, event, x, y, flags, param):
         if event == cv2.EVENT_LBUTTONDOWN:
-            self.temp_points.append((x, y))
-            print(f"Line point {len(self.temp_points)}: ({x}, {y})")
-            
-            if len(self.temp_points) == 2:
-                self.line_p1, self.line_p2 = self.temp_points
-                self.temp_points = []
-                self.save_line()
-                print("✅ Line completed and saved")
+            if len(self.temp_points) < 4:
+                self.temp_points.append((x, y))
+                print(f"Point {len(self.temp_points)}/4 added: ({x}, {y})")
+                
+                if len(self.temp_points) == 4:
+                    self.polygon_points = self.temp_points.copy()
+                    self.polygon = Polygon(self.polygon_points)
+                    self.temp_points = []
+                    self.save_polygon()
+                    print("✅ Polygon complete and saved!")
 
-    # ---------------- Save / Load Line ----------------
-    def save_line(self):
+    # ---------------- Save / Load Polygon ----------------
+    def save_polygon(self):
         with open(self.json_file, "w") as f:
-            json.dump({"line_p1": self.line_p1, "line_p2": self.line_p2}, f)
-        print(f"✅ Line saved to {self.json_file}")
+            json.dump({"polygon_points": self.polygon_points}, f)
 
-    def load_line(self):
+    def load_polygon(self):
         if os.path.exists(self.json_file):
             with open(self.json_file) as f:
                 data = json.load(f)
-                self.line_p1 = tuple(data["line_p1"])
-                self.line_p2 = tuple(data["line_p2"])
-                print(f"✅ Line loaded from {self.json_file}")
+                self.polygon_points = [tuple(p) for p in data["polygon_points"]]
+                self.polygon = Polygon(self.polygon_points)
+                print(f"✅ Loaded polygon with {len(self.polygon_points)} points")
 
-    # ---------------- Utility ----------------
-    def side(self, px, py, x1, y1, x2, y2):
-        return (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
-
-    # ================= MISSED TRACK HANDLER (ONLY IN/OUT) =================
+    # ================= MISSED TRACK HANDLER =================
     def check_lost_ids(self):
         """
         Check for objects that disappeared without being counted.
@@ -139,32 +141,30 @@ class ObjectCounter:
         current = self.frame_count
         lost = []
 
-        # ✅ FIX: Convert to list to avoid modification during iteration
-        for tid, last in list(self.last_seen.items()):
+        for tid, last in self.last_seen.items():
             if current - last > self.max_missing_frames:
                 lost.append(tid)
 
         for tid in lost:
             # Only check crossed objects that weren't counted
             if tid in self.crossed_ids and tid not in self.counted:
-                if tid in self.hist:
-                    last_cx, last_cy = self.hist[tid]
-                    last_side = self.side(last_cx, last_cy, *self.line_p1, *self.line_p2)
+                if tid in self.prev_position:
+                    last_cx, last_cy = self.prev_position[tid]
                     
-                    # IN logic: ended on positive side
-                    if last_side > 0:
+                    # Determine if it was entering or exiting based on last position
+                    if self.polygon and self.polygon.contains(Point(last_cx, last_cy)):
+                        # Was inside polygon when lost
                         self.missed_in.add(tid)
-                        print(f"⚠️ MISSED IN (Back) - ID:{tid}")
-                    
-                    # OUT logic: ended on negative side
-                    elif last_side < 0:
+                        print(f"⚠️ MISSED IN - ID:{tid}")
+                    else:
+                        # Was outside polygon when lost
                         self.missed_out.add(tid)
-                        print(f"⚠️ MISSED OUT (Back) - ID:{tid}")
+                        print(f"⚠️ MISSED OUT - ID:{tid}")
 
             # Cleanup
             self.hist.pop(tid, None)
             self.last_seen.pop(tid, None)
-            self.origin_side.pop(tid, None)
+            self.prev_position.pop(tid, None)
 
     # ---------------- Reset Function ----------------
     def reset_all_data(self):
@@ -176,126 +176,153 @@ class ObjectCounter:
         self.last_seen.clear()
         self.crossed_ids.clear()
         self.counted.clear()
-        self.origin_side.clear()
+        self.prev_position.clear()
         self.missed_in.clear()
         self.missed_out.clear()
         self.in_count = 0
         self.out_count = 0
         
         self.start_new_session()
-        print("✅ RESET DONE - New session started (Back Camera)")
+        print("✅ RESET DONE - New session started")
 
-    # ---------------- Main Loop (RTSP Only) ----------------
+    # ---------------- Main Loop ----------------
     def run(self):
-        print("RUNNING... [RTSP BACK CAMERA]")
-        print("Click 2 points to draw counting line | Press O to Reset | ESC to Exit")
+        print("RUNNING... Click 4 points to draw polygon | Press O to Reset | ESC to Exit")
 
         while True:
-            # ✅ RTSP Stream frame reading
-            frame = self.cap.read()
-            
-            # ✅ Validate frame
-            if frame is None:
-                print("⚠️ No frame from RTSP stream, retrying...")
-                time.sleep(0.1)
-                continue
+            if self.is_rtsp:
+                frame = self.cap.read()
+            else:
+                ret, frame = self.cap.read()
+                if not ret:
+                    break
 
             self.frame_count += 1
-            
-            # Optional: Process every frame or skip frames
-            # if self.frame_count % 3 != 0:
-            #     continue
-            
             frame = cv2.resize(frame, (640, 360))
 
-            # Draw temporary line points
-            for pt in self.temp_points:
+            # Draw temporary points
+            for i, pt in enumerate(self.temp_points):
                 cv2.circle(frame, pt, 5, (0, 0, 255), -1)
+                cv2.putText(frame, str(i+1), (pt[0]+10, pt[1]-10),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                if i > 0:
+                    cv2.line(frame, self.temp_points[i-1], pt, (0, 0, 255), 2)
 
-            # Draw counting line
-            if self.line_p1:
-                cv2.line(frame, self.line_p1, self.line_p2,
-                         (255, 255, 255), 2)
+            # Draw complete polygon
+            if self.polygon_points:
+                pts = np.array(self.polygon_points, np.int32)
+                pts = pts.reshape((-1, 1, 2))
+                cv2.polylines(frame, [pts], True, (255, 255, 0), 2)
+                
+                # Fill with semi-transparent overlay
+                overlay = frame.copy()
+                cv2.fillPoly(overlay, [pts], (0, 255, 255))
+                cv2.addWeighted(overlay, 0.2, frame, 0.8, 0, frame)
 
-            # YOLO tracking
+            # Run detection and tracking
             results = self.model.track(
                 frame, persist=True, classes=self.classes, conf=0.80)
 
-            if results[0].boxes.id is not None and self.line_p1:
+            if results[0].boxes.id is not None and self.polygon:
                 ids = results[0].boxes.id.cpu().numpy().astype(int)
                 boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
+                classes = results[0].boxes.cls.cpu().numpy().astype(int)
 
-                for tid, box in zip(ids, boxes):
+                for tid, box, cls in zip(ids, boxes, classes):
                     x1, y1, x2, y2 = box
                     cx = int((x1 + x2) / 2)
                     cy = int((y1 + y2) / 2)
 
+                    current_point = Point(cx, cy)
                     self.last_seen[tid] = self.frame_count
 
-                    # Set origin side on first detection
-                    if tid not in self.hist:
-                        s_init = self.side(cx, cy, *self.line_p1, *self.line_p2)
-                        if s_init < 0:
-                            self.origin_side[tid] = "IN"
-                        else:
-                            self.origin_side[tid] = "OUT"
+                    # Check if object is inside polygon
+                    is_inside = self.polygon.contains(current_point)
 
-                    # Check for line crossing
-                    if tid in self.hist:
-                        px, py = self.hist[tid]
-                        s1 = self.side(px, py, *self.line_p1, *self.line_p2)
-                        s2 = self.side(cx, cy, *self.line_p1, *self.line_p2)
+                    # Track crossing
+                    if tid in self.prev_position:
+                        prev_cx, prev_cy = self.prev_position[tid]
+                        prev_point = Point(prev_cx, prev_cy)
+                        was_inside = self.polygon.contains(prev_point)
 
-                        # Line crossed (different signs)
-                        if s1 * s2 < 0:
+                        # Detect crossing
+                        if was_inside != is_inside and tid not in self.counted:
                             self.crossed_ids.add(tid)
-
-                            if tid not in self.counted:
-                                if s2 > 0:
+                            
+                            # Calculate region dimensions for direction
+                            region_width = max(p[0] for p in self.polygon_points) - min(p[0] for p in self.polygon_points)
+                            region_height = max(p[1] for p in self.polygon_points) - min(p[1] for p in self.polygon_points)
+                            
+                            # Determine IN/OUT based on movement direction
+                            if is_inside:
+                                # Object entered polygon
+                                if (region_width < region_height and cx > prev_cx) or \
+                                   (region_width >= region_height and cy > prev_cy):
+                                    # Moving right or downward
                                     self.in_count += 1
-                                    print(f"✅ IN (Back) - ID:{tid}")
+                                    print(f"✅ IN - ID:{tid}")
                                 else:
+                                    # Moving left or upward
                                     self.out_count += 1
-                                    print(f"✅ OUT (Back) - ID:{tid}")
+                                    print(f"✅ OUT - ID:{tid}")
+                            else:
+                                # Object exited polygon
+                                if (region_width < region_height and cx > prev_cx) or \
+                                   (region_width >= region_height and cy > prev_cy):
+                                    # Moving right or downward
+                                    self.out_count += 1
+                                    print(f"✅ OUT - ID:{tid}")
+                                else:
+                                    # Moving left or upward
+                                    self.in_count += 1
+                                    print(f"✅ IN - ID:{tid}")
+                            
+                            self.counted.add(tid)
 
-                                self.counted.add(tid)
-
+                    # Update position
+                    self.prev_position[tid] = (cx, cy)
                     self.hist[tid] = (cx, cy)
 
-                    origin_label = self.origin_side.get(tid, "?")
+                    # Draw bounding box
+                    color = (0, 255, 0) if is_inside else (0, 165, 255)
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
                     
-                    # Draw bounding box and ID
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    cv2.putText(frame, f"ID:{tid} [{origin_label}]", (x1, y1 - 10),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 200, 0), 2)
+                    status = "IN" if is_inside else "OUT"
+                    cv2.putText(frame, f"ID:{tid} [{status}]", (x1, y1 - 10),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 200, 0), 2)
 
-            # Check for lost objects
-            if self.line_p1:
+            if self.polygon:
                 self.check_lost_ids()
 
-            # Display counts on frame
-            cv2.putText(frame, f"IN: {self.in_count}", (10, 30),
-                       cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-            cv2.putText(frame, f"OUT: {self.out_count}", (10, 70),
-                       cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-            cv2.putText(frame, "BACK CAMERA", (10, 110),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+            # Display counts
+            cv2.putText(frame, f"IN: {self.in_count} | OUT: {self.out_count}", 
+                       (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            cv2.putText(frame, f"Missed IN: {len(self.missed_in)} | Missed OUT: {len(self.missed_out)}", 
+                       (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
             if self.show:
-                cv2.imshow("ObjectCounter - RTSP Back", frame)
+                cv2.imshow("ObjectCounter", frame)
                 key = cv2.waitKey(1) & 0xFF
 
                 if key == ord('o') or key == ord('O'):
                     self.reset_all_data()
-
-                elif key == 27:  # ESC
-                    print("👋 Exiting...")
+                elif key == ord('c') or key == ord('C'):
+                    # Clear polygon and start new
+                    self.polygon_points = []
+                    self.temp_points = []
+                    self.polygon = None
+                    print("🔄 Polygon cleared. Click 4 new points.")
+                elif key == 27:
                     break
 
-        # Cleanup
         self.end_current_session()
         self.print_session_summary()
-        self.cap.stop()
+
+        if self.is_rtsp:
+            self.cap.stop()
+        else:
+            self.cap.release()
+
         cv2.destroyAllWindows()
 
 
@@ -304,14 +331,10 @@ class ObjectCounter:
 # ==========================================================
 
 if __name__ == "__main__":
-    # RTSP stream configuration
-    RTSP_URL = "rtsp://username:password@192.168.1.100:554/stream1"
-    
     counter = ObjectCounter(
-        source=RTSP_URL,
+        source="your_video.mp4",
         model="best_float32.tflite",
         classes_to_count=[0],
-        show=True,
-        json_file="line_coords_back.json"
+        show=True
     )
     counter.run()
