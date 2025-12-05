@@ -132,19 +132,23 @@ class ObjectCounter:
     def initialize_region(self):
         """Convert region points to numpy array and Shapely polygon"""
         if len(self.region) >= 3:
+            # Create polygon from points (not rectangle!)
             self.polygon_points = np.array(self.region, dtype=np.int32)
             self.r_s = Polygon(self.region)
             self.region_initialized = True
             
-            # Calculate region dimensions for direction detection
-            self.region_width = max(p[0] for p in self.region) - min(p[0] for p in self.region)
-            self.region_height = max(p[1] for p in self.region) - min(p[1] for p in self.region)
+            # Calculate bounding box dimensions for direction detection
+            x_coords = [p[0] for p in self.region]
+            y_coords = [p[1] for p in self.region]
+            self.region_width = max(x_coords) - min(x_coords)
+            self.region_height = max(y_coords) - min(y_coords)
             
-            print(f"✅ Polygon initialized: W={self.region_width}, H={self.region_height}")
+            print(f"✅ Polygon initialized: {len(self.region)} points")
+            print(f"   Bounding box: W={self.region_width}, H={self.region_height}")
             if self.region_width < self.region_height:
-                print("   Vertical polygon: Right=IN, Left=OUT")
+                print("   Vertical orientation: Right=IN, Left=OUT")
             else:
-                print("   Horizontal polygon: Down=IN, Up=OUT")
+                print("   Horizontal orientation: Down=IN, Up=OUT")
         else:
             print("⚠️  Need at least 3 points to create a polygon")
             self.region_initialized = False
