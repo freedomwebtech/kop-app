@@ -113,16 +113,42 @@ class ObjectCounter:
 
     # ---------------- Save / Load Polygon ----------------
     def save_polygon(self):
-        with open(self.json_file, "w") as f:
-            json.dump({"polygon_points": self.polygon_points}, f)
+        """Save polygon coordinates to JSON file"""
+        try:
+            with open(self.json_file, "w") as f:
+                json.dump({"polygon_points": self.polygon_points}, f, indent=2)
+            print(f"💾 Polygon saved to {self.json_file}")
+        except Exception as e:
+            print(f"❌ Error saving polygon: {e}")
 
     def load_polygon(self):
+        """Load polygon coordinates from JSON file"""
         if os.path.exists(self.json_file):
-            with open(self.json_file) as f:
-                data = json.load(f)
-                self.polygon_points = [tuple(p) for p in data["polygon_points"]]
-                self.polygon = Polygon(self.polygon_points)
-                print(f"✅ Loaded polygon with {len(self.polygon_points)} points")
+            try:
+                with open(self.json_file) as f:
+                    data = json.load(f)
+                    
+                    if "polygon_points" not in data:
+                        print(f"⚠️ No 'polygon_points' key found in {self.json_file}")
+                        return
+                    
+                    points = data["polygon_points"]
+                    
+                    if len(points) != 4:
+                        print(f"⚠️ Expected 4 points, found {len(points)}. Please redraw polygon.")
+                        return
+                    
+                    self.polygon_points = [tuple(p) for p in points]
+                    self.polygon = Polygon(self.polygon_points)
+                    print(f"✅ Loaded polygon from {self.json_file}")
+                    print(f"   Points: {self.polygon_points}")
+                    
+            except json.JSONDecodeError:
+                print(f"❌ Invalid JSON in {self.json_file}. Please redraw polygon.")
+            except Exception as e:
+                print(f"❌ Error loading polygon: {e}")
+        else:
+            print(f"ℹ️ No saved polygon found. Click 4 points to create one.")
 
     # ---------------- Reset Function ----------------
     def reset_all_data(self):
