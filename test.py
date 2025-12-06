@@ -21,6 +21,9 @@ class ObjectCounter:
         self.classes = classes_to_count
         self.show = show
 
+        # -------- Frame Counter --------
+        self.frame_count = 0
+
         # -------- RTSP or File --------
         if isinstance(source, str) and source.startswith("rtsp://"):
             self.cap = VideoStream(source).start()
@@ -66,7 +69,8 @@ class ObjectCounter:
             'start_time': datetime.now().strftime('%H:%M:%S'),
             'end_time': None,
             'in_count': 0,
-            'out_count': 0
+            'out_count': 0,
+            'total_frames': 0
         }
 
     def end_current_session(self):
@@ -75,6 +79,7 @@ class ObjectCounter:
             self.current_session_data['end_time'] = datetime.now().strftime('%H:%M:%S')
             self.current_session_data['in_count'] = self.in_count
             self.current_session_data['out_count'] = self.out_count
+            self.current_session_data['total_frames'] = self.frame_count
 
     def print_session_summary(self):
         """Print session summary to console"""
@@ -87,6 +92,7 @@ class ObjectCounter:
         print(f"End Time:      {self.current_session_data['end_time']}")
         print(f"IN Count:      {self.current_session_data['in_count']}")
         print(f"OUT Count:     {self.current_session_data['out_count']}")
+        print(f"Total Frames:  {self.current_session_data['total_frames']}")
         print("=" * 80 + "\n")
 
     # ---------------- Mouse ----------------
@@ -97,6 +103,7 @@ class ObjectCounter:
                 self.line_p1, self.line_p2 = self.temp_points
                 self.temp_points = []
                 self.save_line()
+                print(f"✅ Line saved: {self.line_p1} to {self.line_p2}")
 
     # ---------------- Save / Load Line ----------------
     def save_line(self):
@@ -109,6 +116,7 @@ class ObjectCounter:
                 data = json.load(f)
                 self.line_p1 = tuple(data["line_p1"])
                 self.line_p2 = tuple(data["line_p2"])
+                print(f"✅ Loaded line: {self.line_p1} to {self.line_p2}")
 
     # ---------------- Utility ----------------
     def side(self, px, py, x1, y1, x2, y2):
@@ -126,13 +134,14 @@ class ObjectCounter:
         self.origin_side.clear()
         self.in_count = 0
         self.out_count = 0
+        self.frame_count = 0
         
         self.start_new_session()
         print("✅ RESET DONE - New session started")
 
     # ---------------- Main Loop ----------------
     def run(self):
-        print("RUNNING... Press O to Reset & Show Summary | ESC to Exit")
+        print("RUNNING... Click 2 points to draw line | Press O to Reset | ESC to Exit")
 
         while True:
             if self.is_rtsp:
@@ -142,15 +151,23 @@ class ObjectCounter:
                 if not ret:
                     break
             
+            # Increment frame counter
+            self.frame_count += 1
+            
             frame = cv2.resize(frame, (640, 360))
 
-            for pt in self.temp_points:
+            # Draw temporary points
+            for i, pt in enumerate(self.temp_points):
                 cv2.circle(frame, pt, 5, (0, 0, 255), -1)
+                cv2.putText(frame, str(i+1), (pt[0]+10, pt[1]-10),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
 
+            # Draw complete line
             if self.line_p1:
                 cv2.line(frame, self.line_p1, self.line_p2,
-                         (255, 255, 255), 2)
+                         (255, 255, 0), 3)
 
+            # Run detection and tracking
             results = self.model.track(
                 frame, persist=True, classes=self.classes, conf=0.80)
 
@@ -163,6 +180,7 @@ class ObjectCounter:
                     cx = int((x1 + x2) / 2)
                     cy = int((y1 + y2) / 2)
 
+                    # First time seeing this object - record which side it starts on
                     if tid not in self.hist:
                         s_init = self.side(cx, cy, *self.line_p1, *self.line_p2)
                         if s_init < 0:
@@ -170,21 +188,23 @@ class ObjectCounter:
                         else:
                             self.origin_side[tid] = "OUT"
 
+                    # Check for line crossing
                     if tid in self.hist:
                         px, py = self.hist[tid]
                         s1 = self.side(px, py, *self.line_p1, *self.line_p2)
                         s2 = self.side(cx, cy, *self.line_p1, *self.line_p2)
 
+                        # Line crossed (sign changed)
                         if s1 * s2 < 0:
                             self.crossed_ids.add(tid)
 
                             if tid not in self.counted:
                                 if s2 > 0:
                                     self.in_count += 1
-                                    print(f"✅ IN - ID:{tid}")
+                                    print(f"✅ IN - ID:{tid} (Frame: {self.frame_count})")
                                 else:
                                     self.out_count += 1
-                                    print(f"✅ OUT - ID:{tid}")
+                                    print(f"✅ OUT - ID:{tid} (Frame: {self.frame_count})")
 
                                 self.counted.add(tid)
 
@@ -192,9 +212,16 @@ class ObjectCounter:
 
                     origin_label = self.origin_side.get(tid, "?")
                     
+                    # Draw bounding box
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                     cv2.putText(frame, f"ID:{tid} [{origin_label}]", (x1, y1 - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 200, 0), 2)
+
+            # Display counts and frame info
+            cv2.putText(frame, f"IN: {self.in_count} | OUT: {self.out_count}", 
+                       (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            cv2.putText(frame, f"Frame: {self.frame_count}", 
+                       (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
             if self.show:
                 cv2.imshow("ObjectCounter", frame)
@@ -202,7 +229,12 @@ class ObjectCounter:
 
                 if key == ord('o') or key == ord('O'):
                     self.reset_all_data()
-
+                elif key == ord('c') or key == ord('C'):
+                    # Clear line and start new
+                    self.line_p1 = None
+                    self.line_p2 = None
+                    self.temp_points = []
+                    print("🔄 Line cleared. Click 2 new points.")
                 elif key == 27:
                     break
 
