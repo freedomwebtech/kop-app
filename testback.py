@@ -23,6 +23,9 @@ class ObjectCounter:
         self.classes = classes_to_count
         self.show = show
 
+        # -------- Frame Counter --------
+        self.frame_count = 0
+
         # -------- RTSP or File --------
         if isinstance(source, str) and source.startswith("rtsp://"):
             self.cap = VideoStream(source).start()
@@ -68,7 +71,8 @@ class ObjectCounter:
             'start_time': datetime.now().strftime('%H:%M:%S'),
             'end_time': None,
             'in_count': 0,
-            'out_count': 0
+            'out_count': 0,
+            'total_frames': 0
         }
 
     def end_current_session(self):
@@ -77,6 +81,7 @@ class ObjectCounter:
             self.current_session_data['end_time'] = datetime.now().strftime('%H:%M:%S')
             self.current_session_data['in_count'] = self.in_count
             self.current_session_data['out_count'] = self.out_count
+            self.current_session_data['total_frames'] = self.frame_count
 
     def print_session_summary(self):
         """Print session summary to console"""
@@ -89,6 +94,7 @@ class ObjectCounter:
         print(f"End Time:      {self.current_session_data['end_time']}")
         print(f"IN Count:      {self.current_session_data['in_count']}")
         print(f"OUT Count:     {self.current_session_data['out_count']}")
+        print(f"Total Frames:  {self.current_session_data['total_frames']}")
         print("=" * 80 + "\n")
 
     # ---------------- Mouse ----------------
@@ -130,6 +136,7 @@ class ObjectCounter:
         self.prev_position.clear()
         self.in_count = 0
         self.out_count = 0
+        self.frame_count = 0
         
         self.start_new_session()
         print("✅ RESET DONE - New session started")
@@ -145,6 +152,9 @@ class ObjectCounter:
                 ret, frame = self.cap.read()
                 if not ret:
                     break
+
+            # Increment frame counter
+            self.frame_count += 1
 
             frame = cv2.resize(frame, (640, 360))
 
@@ -207,22 +217,22 @@ class ObjectCounter:
                                    (region_width >= region_height and cy > prev_cy):
                                     # Moving right or downward
                                     self.in_count += 1
-                                    print(f"✅ IN - ID:{tid}")
+                                    print(f"✅ IN - ID:{tid} (Frame: {self.frame_count})")
                                 else:
                                     # Moving left or upward
                                     self.out_count += 1
-                                    print(f"✅ OUT - ID:{tid}")
+                                    print(f"✅ OUT - ID:{tid} (Frame: {self.frame_count})")
                             else:
                                 # Object exited polygon
                                 if (region_width < region_height and cx > prev_cx) or \
                                    (region_width >= region_height and cy > prev_cy):
                                     # Moving right or downward
                                     self.out_count += 1
-                                    print(f"✅ OUT - ID:{tid}")
+                                    print(f"✅ OUT - ID:{tid} (Frame: {self.frame_count})")
                                 else:
                                     # Moving left or upward
                                     self.in_count += 1
-                                    print(f"✅ IN - ID:{tid}")
+                                    print(f"✅ IN - ID:{tid} (Frame: {self.frame_count})")
                             
                             self.counted.add(tid)
 
@@ -238,9 +248,11 @@ class ObjectCounter:
                     cv2.putText(frame, f"ID:{tid} [{status}]", (x1, y1 - 10),
                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 200, 0), 2)
 
-            # Display counts
+            # Display counts and frame info
             cv2.putText(frame, f"IN: {self.in_count} | OUT: {self.out_count}", 
                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            cv2.putText(frame, f"Frame: {self.frame_count}", 
+                       (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
             if self.show:
                 cv2.imshow("ObjectCounter", frame)
