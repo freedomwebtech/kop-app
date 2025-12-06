@@ -39,7 +39,6 @@ class ObjectCounter:
 
         # -------- Tracking Data --------
         self.hist = {}
-        self.last_seen = {}
         self.crossed_ids = set()
         self.counted = set()
         
@@ -50,19 +49,12 @@ class ObjectCounter:
         self.in_count = 0
         self.out_count = 0
 
-        # ✅ ONLY IN/OUT MISSED
-        self.missed_in = set()
-        self.missed_out = set()
-        self.max_missing_frames = 40
-
         # -------- Polygon Region (4 points) --------
         self.polygon_points = []
         self.temp_points = []
         self.polygon = None
         self.json_file = json_file
         self.load_polygon()
-
-        self.frame_count = 0
 
         cv2.namedWindow("ObjectCounter")
         cv2.setMouseCallback("ObjectCounter", self.mouse_event)
@@ -76,9 +68,7 @@ class ObjectCounter:
             'start_time': datetime.now().strftime('%H:%M:%S'),
             'end_time': None,
             'in_count': 0,
-            'out_count': 0,
-            'missed_in': 0,
-            'missed_out': 0
+            'out_count': 0
         }
 
     def end_current_session(self):
@@ -87,8 +77,6 @@ class ObjectCounter:
             self.current_session_data['end_time'] = datetime.now().strftime('%H:%M:%S')
             self.current_session_data['in_count'] = self.in_count
             self.current_session_data['out_count'] = self.out_count
-            self.current_session_data['missed_in'] = len(self.missed_in)
-            self.current_session_data['missed_out'] = len(self.missed_out)
 
     def print_session_summary(self):
         """Print session summary to console"""
@@ -101,8 +89,6 @@ class ObjectCounter:
         print(f"End Time:      {self.current_session_data['end_time']}")
         print(f"IN Count:      {self.current_session_data['in_count']}")
         print(f"OUT Count:     {self.current_session_data['out_count']}")
-        print(f"Missed IN:     {self.current_session_data['missed_in']}")
-        print(f"Missed OUT:    {self.current_session_data['missed_out']}")
         print("=" * 80 + "\n")
 
     # ---------------- Mouse ----------------
@@ -132,40 +118,6 @@ class ObjectCounter:
                 self.polygon = Polygon(self.polygon_points)
                 print(f"✅ Loaded polygon with {len(self.polygon_points)} points")
 
-    # ================= MISSED TRACK HANDLER =================
-    def check_lost_ids(self):
-        """
-        Check for objects that disappeared without being counted.
-        Only tracks MISSED IN and MISSED OUT.
-        """
-        current = self.frame_count
-        lost = []
-
-        for tid, last in self.last_seen.items():
-            if current - last > self.max_missing_frames:
-                lost.append(tid)
-
-        for tid in lost:
-            # Only check crossed objects that weren't counted
-            if tid in self.crossed_ids and tid not in self.counted:
-                if tid in self.prev_position:
-                    last_cx, last_cy = self.prev_position[tid]
-                    
-                    # Determine if it was entering or exiting based on last position
-                    if self.polygon and self.polygon.contains(Point(last_cx, last_cy)):
-                        # Was inside polygon when lost
-                        self.missed_in.add(tid)
-                        print(f"⚠️ MISSED IN - ID:{tid}")
-                    else:
-                        # Was outside polygon when lost
-                        self.missed_out.add(tid)
-                        print(f"⚠️ MISSED OUT - ID:{tid}")
-
-            # Cleanup
-            self.hist.pop(tid, None)
-            self.last_seen.pop(tid, None)
-            self.prev_position.pop(tid, None)
-
     # ---------------- Reset Function ----------------
     def reset_all_data(self):
         """Reset all tracking data and start new session"""
@@ -173,12 +125,9 @@ class ObjectCounter:
         self.print_session_summary()
         
         self.hist.clear()
-        self.last_seen.clear()
         self.crossed_ids.clear()
         self.counted.clear()
         self.prev_position.clear()
-        self.missed_in.clear()
-        self.missed_out.clear()
         self.in_count = 0
         self.out_count = 0
         
@@ -197,7 +146,6 @@ class ObjectCounter:
                 if not ret:
                     break
 
-            self.frame_count += 1
             frame = cv2.resize(frame, (640, 360))
 
             # Draw temporary points
@@ -234,7 +182,6 @@ class ObjectCounter:
                     cy = int((y1 + y2) / 2)
 
                     current_point = Point(cx, cy)
-                    self.last_seen[tid] = self.frame_count
 
                     # Check if object is inside polygon
                     is_inside = self.polygon.contains(current_point)
@@ -291,14 +238,9 @@ class ObjectCounter:
                     cv2.putText(frame, f"ID:{tid} [{status}]", (x1, y1 - 10),
                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 200, 0), 2)
 
-            if self.polygon:
-                self.check_lost_ids()
-
             # Display counts
             cv2.putText(frame, f"IN: {self.in_count} | OUT: {self.out_count}", 
                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-            cv2.putText(frame, f"Missed IN: {len(self.missed_in)} | Missed OUT: {len(self.missed_out)}", 
-                       (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
             if self.show:
                 cv2.imshow("ObjectCounter", frame)
