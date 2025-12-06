@@ -1,4 +1,3 @@
-
 import cv2
 from ultralytics import YOLO
 import json
@@ -38,7 +37,6 @@ class ObjectCounter:
 
         # -------- Tracking Data --------
         self.hist = {}
-        self.last_seen = {}
         self.crossed_ids = set()
         self.counted = set()
         
@@ -49,19 +47,12 @@ class ObjectCounter:
         self.in_count = 0
         self.out_count = 0
 
-        # ✅ ONLY IN/OUT MISSED
-        self.missed_in = set()
-        self.missed_out = set()
-        self.max_missing_frames = 40
-
         # -------- Line --------
         self.line_p1 = None
         self.line_p2 = None
         self.temp_points = []
         self.json_file = json_file
         self.load_line()
-
-        self.frame_count = 0
 
         cv2.namedWindow("ObjectCounter")
         cv2.setMouseCallback("ObjectCounter", self.mouse_event)
@@ -75,9 +66,7 @@ class ObjectCounter:
             'start_time': datetime.now().strftime('%H:%M:%S'),
             'end_time': None,
             'in_count': 0,
-            'out_count': 0,
-            'missed_in': 0,
-            'missed_out': 0
+            'out_count': 0
         }
 
     def end_current_session(self):
@@ -86,8 +75,6 @@ class ObjectCounter:
             self.current_session_data['end_time'] = datetime.now().strftime('%H:%M:%S')
             self.current_session_data['in_count'] = self.in_count
             self.current_session_data['out_count'] = self.out_count
-            self.current_session_data['missed_in'] = len(self.missed_in)
-            self.current_session_data['missed_out'] = len(self.missed_out)
 
     def print_session_summary(self):
         """Print session summary to console"""
@@ -100,8 +87,6 @@ class ObjectCounter:
         print(f"End Time:      {self.current_session_data['end_time']}")
         print(f"IN Count:      {self.current_session_data['in_count']}")
         print(f"OUT Count:     {self.current_session_data['out_count']}")
-        print(f"Missed IN:     {self.current_session_data['missed_in']}")
-        print(f"Missed OUT:    {self.current_session_data['missed_out']}")
         print("=" * 80 + "\n")
 
     # ---------------- Mouse ----------------
@@ -129,41 +114,6 @@ class ObjectCounter:
     def side(self, px, py, x1, y1, x2, y2):
         return (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
 
-    # ================= MISSED TRACK HANDLER (ONLY IN/OUT) =================
-    def check_lost_ids(self):
-        """
-        Check for objects that disappeared without being counted.
-        Only tracks MISSED IN and MISSED OUT.
-        """
-        current = self.frame_count
-        lost = []
-
-        for tid, last in self.last_seen.items():
-            if current - last > self.max_missing_frames:
-                lost.append(tid)
-
-        for tid in lost:
-            # Only check crossed objects that weren't counted
-            if tid in self.crossed_ids and tid not in self.counted:
-                if tid in self.hist:
-                    last_cx, last_cy = self.hist[tid]
-                    last_side = self.side(last_cx, last_cy, *self.line_p1, *self.line_p2)
-                    
-                    # IN logic: ended on positive side
-                    if last_side > 0:
-                        self.missed_in.add(tid)
-                        print(f"⚠️ MISSED IN - ID:{tid}")
-                    
-                    # OUT logic: ended on negative side
-                    elif last_side < 0:
-                        self.missed_out.add(tid)
-                        print(f"⚠️ MISSED OUT - ID:{tid}")
-
-            # Cleanup
-            self.hist.pop(tid, None)
-            self.last_seen.pop(tid, None)
-            self.origin_side.pop(tid, None)
-
     # ---------------- Reset Function ----------------
     def reset_all_data(self):
         """Reset all tracking data and start new session"""
@@ -171,12 +121,9 @@ class ObjectCounter:
         self.print_session_summary()
         
         self.hist.clear()
-        self.last_seen.clear()
         self.crossed_ids.clear()
         self.counted.clear()
         self.origin_side.clear()
-        self.missed_in.clear()
-        self.missed_out.clear()
         self.in_count = 0
         self.out_count = 0
         
@@ -194,10 +141,6 @@ class ObjectCounter:
                 ret, frame = self.cap.read()
                 if not ret:
                     break
-
-           # self.frame_count += 1
-           # if self.frame_count % 3 != 0:
-           #     continue
             
             frame = cv2.resize(frame, (640, 360))
 
@@ -219,8 +162,6 @@ class ObjectCounter:
                     x1, y1, x2, y2 = box
                     cx = int((x1 + x2) / 2)
                     cy = int((y1 + y2) / 2)
-
-                    self.last_seen[tid] = self.frame_count
 
                     if tid not in self.hist:
                         s_init = self.side(cx, cy, *self.line_p1, *self.line_p2)
@@ -254,9 +195,6 @@ class ObjectCounter:
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                     cv2.putText(frame, f"ID:{tid} [{origin_label}]", (x1, y1 - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 200, 0), 2)
-
-            if self.line_p1:
-                self.check_lost_ids()
 
             if self.show:
                 cv2.imshow("ObjectCounter", frame)
