@@ -62,7 +62,8 @@ class ObjectCounter:
         # -------- Polygon Region (4 points) --------
         self.polygon_points = []
         self.temp_points = []
-        self.polygon = None
+        self.json_file = json_file             
+        #self.polygon = None
         
         # Load polygon BEFORE creating window
         self.load_polygon()
